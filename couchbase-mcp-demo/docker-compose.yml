@@ -38,11 +38,11 @@ services:
     volumes:
       - ollama-data:/root/.ollama
     healthcheck:
-      test: ["CMD", "ollama", "list"]
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 10s
       timeout: 5s
       retries: 30
-      start_period: 20s
+      start_period: 30s
 
   ollama-pull:
     image: ollama/ollama:latest
