@@ -25,8 +25,7 @@ documents and embeds those too -- continuously, with no further action needed.
 
 Couchbase Vector Search (vector-typed FTS fields) requires **Couchbase Server
 Enterprise Edition 7.6.0+, or Capella** -- Community Edition rejects vector-typed
-fields outright. Unlike the Migration Agent's own internal agent-memory store (which
-has a legitimate cosine-similarity fallback for its own use on CE), this agent's
+fields outright. The agent's
 entire purpose is standing up real, queryable Couchbase Vector Search against your
 documents, so `core/validator.py` treats an unsupported cluster as a blocking error,
 not something to gracefully degrade around. Validation also creates the actual FTS
