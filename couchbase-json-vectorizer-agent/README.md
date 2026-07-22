@@ -2,15 +2,15 @@
 
 A Dockerized AI agent that creates real-time vector embeddings for JSON documents
 stored in Couchbase, and validates that Couchbase Vector Search is fully operational
-against the result. Built as a sibling project to the **Couchbase Migration Agent**,
-sharing its dark-mode Couchbase-branded UI, wizard pattern, and local-LLM-assistant
-architecture.
+against the results.
 
 A setup wizard walks through source connection details (with one or more buckets),
 where vectorized documents should be written, and which embedding model to use. Once
 launched, the agent backfills every existing JSON document in the configured
 bucket(s) that doesn't yet have an embedding, then keeps polling for newly-created
 documents and embeds those too -- continuously, with no further action needed.
+
+﻿﻿<img width="2940" height="1626" alt="couchbase-json-vectorizer-agent-demo" src="https://github.com/user-attachments/assets/f50f1e49-0779-4600-b379-3b066f0a981f" />
 
 ## Architecture
 
@@ -25,8 +25,7 @@ documents and embeds those too -- continuously, with no further action needed.
 
 Couchbase Vector Search (vector-typed FTS fields) requires **Couchbase Server
 Enterprise Edition 7.6.0+, or Capella** -- Community Edition rejects vector-typed
-fields outright. Unlike the Migration Agent's own internal agent-memory store (which
-has a legitimate cosine-similarity fallback for its own use on CE), this agent's
+fields outright. The agent's
 entire purpose is standing up real, queryable Couchbase Vector Search against your
 documents, so `core/validator.py` treats an unsupported cluster as a blocking error,
 not something to gracefully degrade around. Validation also creates the actual FTS
