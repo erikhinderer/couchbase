@@ -97,6 +97,33 @@ progress, with a live **Agent Operations** feed streaming down the right side of
 every page. Ask the agent panel (bottom, next to the feed) about validation results
 or which model to pick.
 
+## Troubleshooting
+
+- **"Embedding model loaded" check fails during validation, or `/warmup` /
+  `/embed` return 400**: this means `embedding-service` couldn't load the
+  selected Hugging Face model into `sentence-transformers`. The validation
+  message now includes the real underlying error (not just a generic "400 Bad
+  Request") -- but the full Python traceback is only in that container's own
+  logs:
+  ```bash
+  docker compose logs -f embedding-service
+  ```
+  The most common causes, in order of likelihood:
+  1. **No network egress from the container to huggingface.co** on first use of
+     a given model (models are downloaded lazily, not baked into the image).
+     Check the host/Docker network's outbound access; `embedding-service` needs
+     to reach `huggingface.co` and `cdn-lfs.huggingface.co`.
+  2. **The `embedding_model_cache` volume isn't writable** by the container
+     (rare, but possible on some Docker Desktop/volume driver setups). The
+     service creates `/data/hf-cache` at both build time and startup, but if
+     the mounted volume itself is read-only or owned by a different uid, model
+     downloads will fail.
+  3. **Out of disk space** -- BGE-M3 is ~2.3GB; smaller MiniLM models are
+     under 100MB. `docker system df` shows volume usage.
+  4. Transient network hiccups on a cold container are retried automatically
+     (`embedding-service/app/main.py` retries a model load once after a few
+     seconds) but a persistent failure means one of the above.
+
 ## Configuration notes
 
 - **Multiple source buckets**: the wizard's **+ Add bucket** button adds entries to

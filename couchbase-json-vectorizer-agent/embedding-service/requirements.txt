@@ -4,3 +4,11 @@ pydantic==2.10.4
 sentence-transformers==3.3.1
 torch==2.5.1
 numpy==1.26.4
+# sentencepiece: required by BAAI/bge-m3's XLM-RoBERTa tokenizer.
+# einops: required by nomic-ai/nomic-embed-text-v1 / v1.5's custom model code
+# (loaded with trust_remote_code=True -- see app/main.py). Both are declared
+# here explicitly rather than relying on transformers' optional-dependency
+# resolution, since a missing tokenizer dependency previously surfaced as an
+# opaque "400 Bad Request" with no indication of the real cause.
+sentencepiece==0.2.0
+einops==0.8.0

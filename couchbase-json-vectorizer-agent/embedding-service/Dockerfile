@@ -15,6 +15,15 @@ COPY app ./app
 ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/data/hf-cache
 
+# Created at build time so the directory (and its ownership) exists even before
+# the named volume is mounted over it -- app/main.py also creates it defensively
+# at startup, but doing it here too avoids relying solely on that. Also disable
+# hf_transfer's accelerated-download path: it requires the separate `hf_transfer`
+# package, which isn't installed here, and huggingface_hub raises an ImportError
+# if HF_HUB_ENABLE_HF_TRANSFER is ever set truthy without it present.
+RUN mkdir -p /data/hf-cache
+ENV HF_HUB_ENABLE_HF_TRANSFER=0
+
 EXPOSE 8500
 
 HEALTHCHECK --interval=15s --timeout=10s --retries=10 --start-period=20s \
