@@ -1,0 +1,60 @@
+"""
+Couchbase MCP Tool Filtering Demo configuration.
+
+Docker Compose supplies safe defaults. For a local non-Docker run, copy this file to config.py
+and set COUCHBASE_CONNECTION_STRING / OLLAMA_BASE_URL as needed.
+"""
+import os
+
+COUCHBASE_CONFIG = {
+    # Connection string to the Couchbase cluster (Server or Capella).
+    "connection_string": os.getenv("COUCHBASE_CONNECTION_STRING", "couchbase://localhost"),
+    "username": os.getenv("COUCHBASE_USERNAME", "Administrator"),
+    "password": os.getenv("COUCHBASE_PASSWORD", "CouchbaseDemo123!"),
+    # Bucket/scope/collections used as the vector store + semantic cache.
+    "bucket": os.getenv("COUCHBASE_BUCKET", "mcp_demo"),
+    "scope": os.getenv("COUCHBASE_SCOPE", "mcp_demo"),
+    "tools_collection": os.getenv("COUCHBASE_TOOLS_COLLECTION", "tools"),
+    "cache_collection": os.getenv("COUCHBASE_CACHE_COLLECTION", "semantic_cache"),
+    # Search (FTS) vector index names, scoped to bucket.scope above.
+    "tools_index": os.getenv("COUCHBASE_TOOLS_INDEX", "tools_vector_index"),
+    "cache_index": os.getenv("COUCHBASE_CACHE_INDEX", "semantic_cache_vector_index"),
+    # Host used for Search Service REST index administration (port 8094).
+    "search_host": os.getenv("COUCHBASE_SEARCH_HOST", "localhost"),
+    "search_port": int(os.getenv("COUCHBASE_SEARCH_PORT", "8094")),
+}
+
+OLLAMA_CONFIG = {
+    "base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+    "api_key": os.getenv("OLLAMA_API_KEY", "ollama"),
+    "model": os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
+    "max_tokens": int(os.getenv("OLLAMA_MAX_TOKENS", "512")),
+    "temperature": float(os.getenv("OLLAMA_TEMPERATURE", "0.2")),
+}
+
+DEMO_CONFIG = {
+    "port": int(os.getenv("PORT", "8089")),
+    "host": os.getenv("HOST", "0.0.0.0"),
+    "debug": os.getenv("NODE_ENV", "development") == "development",
+    "enable_mock_mode": os.getenv("ENABLE_MOCK_MODE", "false").lower() == "true",
+}
+
+PERFORMANCE_CONFIG = {
+    "cache_ttl": int(os.getenv("COUCHBASE_CACHE_TTL", "300")),
+    "vector_dim": int(os.getenv("COUCHBASE_VECTOR_DIM", "384")),
+    "similarity_threshold": float(os.getenv("SIMILARITY_THRESHOLD", "0.2")),
+    "cache_similarity_threshold": float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.70")),
+    "max_vector_search_results": int(os.getenv("MAX_VECTOR_SEARCH_RESULTS", "10")),
+    "embedding_cache_size": int(os.getenv("EMBEDDING_CACHE_SIZE", "1000")),
+    "enable_timing_logs": os.getenv("ENABLE_TIMING_LOGS", "true").lower() == "true",
+    "log_level": os.getenv("LOG_LEVEL", "INFO"),
+}
+
+# The local Ollama model itself has no per-token billing. These rates let the
+# UI show a reference/estimated cost - "what this query would cost on a
+# comparable hosted LLM API" - so the token-savings from Couchbase filtering
+# still translate into a dollar figure worth comparing between the two panels.
+LLM_PRICING = {
+    "input_cost_per_1m": float(os.getenv("LLM_INPUT_COST_PER_1M", "5.00")),
+    "output_cost_per_1m": float(os.getenv("LLM_OUTPUT_COST_PER_1M", "30.00")),
+}

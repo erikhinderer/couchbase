@@ -1,0 +1,66 @@
+This is an example Couchbase Search (FTS) vector index definition for the movies
+dataset used by this demo. Create it via the Couchbase Web Console (Search > Add
+Index) or the REST API against the `mcp_demo` bucket / `mcp_demo` scope, over a
+`movies` collection whose documents look like:
+  { "title": "...", "plot": "...", "genre": "...", "release_year": 1999,
+    "rating": 8.1, "plot_embedding": [0.01, -0.02, ...] }
+
+{
+  "type": "fulltext-index",
+  "name": "mcp_demo.mcp_demo.movies-vector-index",
+  "sourceType": "gocbcore",
+  "sourceName": "mcp_demo",
+  "planParams": { "maxPartitionsPerPIndex": 512, "indexPartitions": 1 },
+  "params": {
+    "doc_config": {
+      "mode": "scope.collection.type_field",
+      "type_field": "doc_type"
+    },
+    "mapping": {
+      "default_mapping": { "dynamic": false, "enabled": false },
+      "types": {
+        "mcp_demo.movies": {
+          "dynamic": false,
+          "enabled": true,
+          "properties": {
+            "title": {
+              "dynamic": false, "enabled": true,
+              "fields": [{ "name": "title", "type": "text", "analyzer": "en", "index": true, "store": true }]
+            },
+            "plot": {
+              "dynamic": false, "enabled": true,
+              "fields": [{ "name": "plot", "type": "text", "analyzer": "en", "index": true, "store": true }]
+            },
+            "genre": {
+              "dynamic": false, "enabled": true,
+              "fields": [{ "name": "genre", "type": "text", "index": true, "store": true }]
+            },
+            "release_year": {
+              "dynamic": false, "enabled": true,
+              "fields": [{ "name": "release_year", "type": "number", "index": true, "store": true }]
+            },
+            "rating": {
+              "dynamic": false, "enabled": true,
+              "fields": [{ "name": "rating", "type": "number", "index": true, "store": true }]
+            },
+            "plot_embedding": {
+              "dynamic": false, "enabled": true,
+              "fields": [{ "name": "plot_embedding", "type": "vector", "dims": 384, "similarity": "dot_product", "index": true, "store": true }]
+            }
+          }
+        }
+      }
+    },
+    "store": { "indexType": "scorch", "segmentVersion": 16 }
+  },
+  "sourceParams": {}
+}
+
+Note: unlike Redis (which auto-provisions FT.CREATE indexes and ships a ready-made
+"redis-search-showcase" movie dataset loader), Couchbase requires the bucket/scope/
+collection and this Search index to exist before querying, and there's no equivalent
+pre-built movie-embeddings loader for Couchbase. Load your own dataset (embed each
+plot with the same model used at query time, all-MiniLM-L6-v2 / 384 dims) into the
+`movies` collection, or adapt the main mcp-tool-filtering demo's
+`ensure_search_indexes()` / `index_tools_with_embeddings()` in app.py as a reference
+for provisioning + indexing this collection from Python.

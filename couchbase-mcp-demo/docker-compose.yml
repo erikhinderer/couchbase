@@ -1,0 +1,106 @@
+services:
+  couchbase:
+    image: couchbase:community-7.6.2
+    container_name: couchbase-mcp-couchbase
+    ports:
+      - "8091-8096:8091-8096"
+      - "11210:11210"
+    volumes:
+      - couchbase-data:/opt/couchbase/var
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-u", "${COUCHBASE_USERNAME:-Administrator}:${COUCHBASE_PASSWORD:-CouchbaseDemo123!}", "http://localhost:8091/pools"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  couchbase-init:
+    image: couchbase:community-7.6.2
+    container_name: couchbase-mcp-couchbase-init
+    depends_on:
+      couchbase:
+        condition: service_healthy
+    volumes:
+      - ./couchbase-init/init.sh:/init.sh:ro
+    environment:
+      COUCHBASE_USERNAME: ${COUCHBASE_USERNAME:-Administrator}
+      COUCHBASE_PASSWORD: ${COUCHBASE_PASSWORD:-CouchbaseDemo123!}
+      COUCHBASE_BUCKET: ${COUCHBASE_BUCKET:-mcp_demo}
+      COUCHBASE_SCOPE: ${COUCHBASE_SCOPE:-mcp_demo}
+    entrypoint: ["/bin/sh", "/init.sh"]
+    restart: "no"
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: couchbase-mcp-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: couchbase-mcp-ollama-pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "ollama pull ${OLLAMA_MODEL:-llama3.1:8b}"
+    restart: "no"
+
+  app:
+    build:
+      context: ./mcp-tool-filtering
+    container_name: couchbase-mcp-demo
+    depends_on:
+      couchbase:
+        condition: service_healthy
+      couchbase-init:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    ports:
+      - "8089:8089"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8089
+      COUCHBASE_CONNECTION_STRING: couchbase://couchbase
+      COUCHBASE_USERNAME: ${COUCHBASE_USERNAME:-Administrator}
+      COUCHBASE_PASSWORD: ${COUCHBASE_PASSWORD:-CouchbaseDemo123!}
+      COUCHBASE_BUCKET: ${COUCHBASE_BUCKET:-mcp_demo}
+      COUCHBASE_SCOPE: ${COUCHBASE_SCOPE:-mcp_demo}
+      COUCHBASE_SEARCH_HOST: couchbase
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_MAX_TOKENS: 512
+      OLLAMA_TEMPERATURE: 0.2
+      LLM_INPUT_COST_PER_1M: ${LLM_INPUT_COST_PER_1M:-5.00}
+      LLM_OUTPUT_COST_PER_1M: ${LLM_OUTPUT_COST_PER_1M:-30.00}
+      LOG_LEVEL: INFO
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8089/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+volumes:
+  couchbase-data:
+  ollama-data:
+  hf-cache:

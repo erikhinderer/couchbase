@@ -1,0 +1,37 @@
+"""
+Configs for Couchbase MCP Assistant
+"""
+import os
+
+# Couchbase cluster credentials - passed straight through as env vars to the
+# Couchbase MCP server (https://github.com/couchbase/mcp-server-couchbase).
+COUCHBASE_CONFIG = {
+    "CB_CONNECTION_STRING": "couchbases://your-cluster-address",
+    "CB_USERNAME": "Administrator",
+    "CB_PASSWORD": "your_couchbase_password",
+}
+
+# MCP Server Configuration
+# The Couchbase MCP server ships on PyPI, so `uvx` can run it directly with no
+# local checkout needed. Set "mcp_source_path" only if you want to run from a
+# cloned copy of https://github.com/couchbase/mcp-server-couchbase instead.
+MCP_CONFIG = {
+    "command": "uvx",  # Result of: which uvx
+    "mcp_source_path": "",  # e.g. "/path/to/mcp-server-couchbase/" if running from source
+}
+
+# Local Ollama model - all LLM inference in this demo runs locally, no
+# external API key needed.
+OLLAMA_CONFIG = {
+    "base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+    "api_key": os.getenv("OLLAMA_API_KEY", "ollama"),
+    "model": os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
+}
+
+def get_mcp_path():
+    return MCP_CONFIG["mcp_source_path"]
+
+# Override with environment variables if present
+for key in COUCHBASE_CONFIG:
+    if os.getenv(key):
+        COUCHBASE_CONFIG[key] = os.getenv(key)
