@@ -35,6 +35,15 @@ class CouchbaseClientError(RuntimeError):
     pass
 
 
+class PendingDocQueryError(CouchbaseClientError):
+    """Raised when the pending-document scan itself fails (e.g. no usable index
+    on the bucket). Deliberately a distinct type from 'legitimately found zero
+    pending documents', since the vectorizer engine's watch loop previously
+    treated both cases identically -- a bucket with a broken query looked
+    exactly like a bucket with nothing left to vectorize, and silently sat
+    doing nothing forever."""
+
+
 def _parse_version(version_str: str) -> tuple[int, int, int]:
     """'7.6.2-XXXX-enterprise' -> (7, 6, 2). Best-effort; unparsable -> (0, 0, 0)."""
     try:
@@ -178,11 +187,16 @@ class CouchbaseClusterClient:
     def ensure_pending_doc_index(self, bucket: str, vector_field: str) -> tuple[bool, str]:
         """Create a partial GSI index over documents still missing the vector field,
         so the vectorizer engine's backfill/watch scan (`WHERE field IS MISSING`)
-        stays fast as buckets grow, instead of falling back to a primary-index scan."""
+        stays fast as buckets grow. Uses the same `AS d` alias as
+        fetch_pending_documents()'s query below so the partial-index predicate is
+        textually identical to the query predicate the engine actually runs --
+        keeping them in sync avoids relying on the query planner to recognize two
+        differently-written (if logically equivalent) expressions as the same
+        thing."""
         index_name = f"idx_vectorizer_pending_{vector_field}"
         statement = (
-            f"CREATE INDEX `{index_name}` ON `{bucket}`(META().id) "
-            f"WHERE `{vector_field}` IS MISSING"
+            f"CREATE INDEX `{index_name}` ON `{bucket}` AS d (META(d).id) "
+            f"WHERE d.`{vector_field}` IS MISSING"
         )
         cluster = self.connect()
         try:
@@ -193,6 +207,23 @@ class CouchbaseClusterClient:
                 return True, f"Pending-document index '{index_name}' already exists on `{bucket}`."
             logger.warning("Could not create pending-doc index on %s: %s", bucket, exc)
             return False, f"Could not create pending-document index on `{bucket}`: {exc}"
+
+    def ensure_primary_index(self, bucket: str) -> tuple[bool, str]:
+        """Fallback safety net: guarantee *some* index exists on the bucket so
+        every WHERE-filtered query the vectorizer engine runs (fetch_pending_documents,
+        bucket_vectorized_count) has something to use, even if ensure_pending_doc_index()
+        above failed for some cluster-specific reason (permissions, an existing
+        conflicting index, etc). Without any index at all, those queries throw
+        'No index available' -- which, before this fix, was being silently
+        swallowed and misread as 'zero pending documents' instead of a real error."""
+        statement = f"CREATE PRIMARY INDEX IF NOT EXISTS ON `{bucket}`"
+        cluster = self.connect()
+        try:
+            cluster.query(statement).execute()
+            return True, f"Primary index ready on `{bucket}`."
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not create primary index on %s: %s", bucket, exc)
+            return False, f"Could not create primary index on `{bucket}`: {exc}"
 
     def ensure_vector_search_index(
         self, bucket: str, scope: str, collection: str, vector_field: str, dimensions: int, similarity: str
@@ -297,8 +328,10 @@ class CouchbaseClusterClient:
             result = cluster.query(query)
             return list(result)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Pending-document fetch failed for bucket %s: %s", bucket, exc)
-            return []
+            logger.error("Pending-document fetch failed for bucket %s: %s", bucket, exc)
+            raise PendingDocQueryError(
+                f"Query for documents pending vectorization in `{bucket}` failed: {exc}"
+            ) from exc
 
     def upsert_document(self, bucket: str, doc_id: str, document: dict[str, Any]) -> None:
         cluster = self.connect()

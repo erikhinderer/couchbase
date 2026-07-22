@@ -2,7 +2,9 @@
 
 A Dockerized AI agent that creates real-time vector embeddings for JSON documents
 stored in Couchbase, and validates that Couchbase Vector Search is fully operational
-against the result.
+against the result. Built as a sibling project to the **Couchbase Migration Agent**,
+sharing its dark-mode Couchbase-branded UI, wizard pattern, and local-LLM-assistant
+architecture.
 
 A setup wizard walks through source connection details (with one or more buckets),
 where vectorized documents should be written, and which embedding model to use. Once

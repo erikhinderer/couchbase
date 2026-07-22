@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 from typing import Awaitable, Callable
 from uuid import UUID
 
-from app.core.couchbase_client import CouchbaseClusterClient
+from app.core.couchbase_client import CouchbaseClusterClient, PendingDocQueryError
 from app.core.embedding_models import get_model_info
 from app.core.embedding_service_client import EmbeddingServiceClient
 from app.core.store import JobStore
@@ -163,12 +163,27 @@ class VectorizerEngine:
         try:
             while not rt.cancelled:
                 any_pending = False
+                any_query_error = False
                 for i, bucket in enumerate(source_buckets):
                     if rt.cancelled:
                         break
-                    pending = source_client.fetch_pending_documents(
-                        bucket, plan.vector_field_name, plan.batch_size
-                    )
+                    try:
+                        pending = source_client.fetch_pending_documents(
+                            bucket, plan.vector_field_name, plan.batch_size
+                        )
+                    except PendingDocQueryError as exc:
+                        # Distinct from "legitimately found zero pending documents" --
+                        # this means the scan itself failed (e.g. no usable index on
+                        # the bucket). Previously this was swallowed and looked
+                        # identical to "nothing left to do", so the job would sit at
+                        # phase=WATCHING looking healthy while silently vectorizing
+                        # nothing, forever. Surface it loudly instead, and don't let
+                        # the phase advance to WATCHING this cycle.
+                        any_query_error = True
+                        self._log(record, OperationStatus.ERROR, str(exc), bucket=bucket)
+                        await store.save(record)
+                        await on_progress(record)
+                        continue
                     if not pending:
                         continue
 
@@ -219,7 +234,7 @@ class VectorizerEngine:
                     await store.save(record)
                     await on_progress(record)
 
-                if not any_pending:
+                if not any_pending and not any_query_error:
                     record.phase = JobPhase.WATCHING
                     record.stats.docs_in_progress = 0
                     self._refresh_rate(record, rt)
@@ -227,7 +242,17 @@ class VectorizerEngine:
                     await store.save(record)
                     await on_progress(record)
                     await asyncio.sleep(plan.poll_interval_seconds)
-                # else: loop again immediately to keep draining the backlog quickly
+                elif any_query_error:
+                    # Don't claim WATCHING (implies healthy/idle) while a bucket's
+                    # pending-document scan is actually broken -- leave the phase as
+                    # whatever it already was (visible as stuck on the dashboard) and
+                    # keep retrying; the operation log entries above explain why.
+                    record.stats.docs_in_progress = 0
+                    await store.save(record)
+                    await on_progress(record)
+                    await asyncio.sleep(plan.poll_interval_seconds)
+                # else: pending documents were found and processed above -- loop
+                # again immediately to keep draining the backlog quickly.
 
         except asyncio.CancelledError:
             pass

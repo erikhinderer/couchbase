@@ -195,17 +195,33 @@ async def validate_job(job_id: UUID, plan: VectorizerJobCreate) -> ValidationRep
                     passed=ok,
                     message=msg,
                 ))
-            for bucket in plan.source.bucket_names:
-                ok, msg = CouchbaseClusterClient(plan.source).ensure_pending_doc_index(
-                    bucket, plan.vector_field_name
-                )
-                checks.append(ValidationCheckResult(
-                    check_id=ValidationCheckId.PENDING_DOC_INDEX,
-                    label=f"Pending-document index on `{bucket}`",
-                    severity=ValidationSeverity.WARNING,
-                    passed=ok,
-                    message=msg,
-                ))
+            pending_index_client = CouchbaseClusterClient(plan.source)
+            try:
+                for bucket in plan.source.bucket_names:
+                    ok, msg = pending_index_client.ensure_pending_doc_index(
+                        bucket, plan.vector_field_name
+                    )
+                    if not ok:
+                        # Fall back to a plain primary index so the vectorizer
+                        # engine's WHERE-filtered scan has *something* to use --
+                        # without any index at all, that query throws and (before
+                        # this fix) was silently misread as "nothing pending",
+                        # leaving the job stuck at 0 vectorized forever with no
+                        # visible error. This is a hard ERROR check (not a
+                        # warning) precisely because a failure here means the
+                        # agent will launch successfully but silently do nothing.
+                        primary_ok, primary_msg = pending_index_client.ensure_primary_index(bucket)
+                        ok = primary_ok
+                        msg = f"{msg} Falling back to a primary index: {primary_msg}"
+                    checks.append(ValidationCheckResult(
+                        check_id=ValidationCheckId.PENDING_DOC_INDEX,
+                        label=f"Pending-document index on `{bucket}`",
+                        severity=ValidationSeverity.ERROR,
+                        passed=ok,
+                        message=msg,
+                    ))
+            finally:
+                pending_index_client.close()
         finally:
             target_client.close()
 
