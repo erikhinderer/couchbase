@@ -10,6 +10,8 @@ launched, the agent backfills every existing JSON document in the configured
 bucket(s) that doesn't yet have an embedding, then keeps polling for newly-created
 documents and embeds those too -- continuously, with no further action needed.
 
+﻿﻿<img width="2940" height="1626" alt="couchbase-json-vectorizer-agent-demo" src="https://github.com/user-attachments/assets/f50f1e49-0779-4600-b379-3b066f0a981f" />
+
 ## Architecture
 
 | Component | Tech | Purpose |
