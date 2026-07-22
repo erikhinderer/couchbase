@@ -1,0 +1,134 @@
+/*
+  Dark-mode theme for the Couchbase JSON Vectorizer Agent -- the same Couchbase
+  brand palette and AWS-DMS-console-inspired layout (left nav, card-based stats
+  panels) as the Couchbase Migration Agent project, so the two tools feel like
+  one family.
+*/
+:root {
+  --cb-red: #EA2328;
+  --cb-red-dim: #7a1215;
+  --cb-red-bright: #FF4B4F;
+  --cb-teal: #00A7B5;
+  --cb-amber: #F2A900;
+  --cb-green: #2ECC71;
+  --cb-blue: #4C9AFF;
+  --cb-purple: #9B6BFF;
+
+  --bg-0: #0B0E14;
+  --bg-1: #12161F;
+  --bg-2: #191E2A;
+  --bg-3: #232936;
+  --border-subtle: #2A3140;
+  --border-strong: #3A4256;
+
+  --text-primary: #E8EAED;
+  --text-secondary: #9AA4B2;
+  --text-muted: #6B7484;
+
+  --status-success: var(--cb-green);
+  --status-warning: var(--cb-amber);
+  --status-error: var(--cb-red-bright);
+  --status-info: var(--cb-blue);
+  --status-progress: var(--cb-teal);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.25);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg-0);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+a { color: var(--cb-teal); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.cb-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.cb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 13px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-2);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.cb-btn:hover { background: var(--bg-3); border-color: var(--cb-teal); }
+.cb-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.cb-btn-primary {
+  background: var(--cb-red);
+  border-color: var(--cb-red);
+  color: white;
+}
+.cb-btn-primary:hover { background: var(--cb-red-bright); border-color: var(--cb-red-bright); }
+
+.cb-btn-danger {
+  background: transparent;
+  border-color: var(--status-error);
+  color: var(--status-error);
+}
+.cb-btn-danger:hover { background: rgba(255, 75, 79, 0.12); }
+
+.cb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.cb-badge-success { background: rgba(46,204,113,0.15); color: var(--status-success); }
+.cb-badge-warning { background: rgba(242,169,0,0.15); color: var(--status-warning); }
+.cb-badge-error { background: rgba(255,75,79,0.15); color: var(--status-error); }
+.cb-badge-info { background: rgba(76,154,255,0.15); color: var(--status-info); }
+.cb-badge-progress { background: rgba(0,167,181,0.15); color: var(--status-progress); }
+
+.cb-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.cb-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.cb-scrollbar::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+
+input[type="text"], input[type="password"], input[type="number"], input:not([type]), select, textarea {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: var(--font-sans);
+}
+input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, input:not([type]):focus,
+select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--cb-teal);
+}
+input[type="checkbox"] { accent-color: var(--cb-red); width: 15px; height: 15px; }

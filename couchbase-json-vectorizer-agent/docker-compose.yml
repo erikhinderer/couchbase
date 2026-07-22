@@ -1,0 +1,80 @@
+services:
+  # -- Local LLM: Qwen 3.8 (Qwen 3, 8B), served via Ollama-compatible API ------
+  # Powers the in-app assistant only -- not the document embeddings themselves.
+  # Runs on CPU by default. For an NVIDIA GPU on Linux:
+  #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
+  qwen-service:
+    build: ./qwen-service
+    container_name: vectorizer-qwen
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks: [vectorizer-net]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # -- Embedding service: serves the user-selected Hugging Face model ---------
+  embedding-service:
+    build: ./embedding-service
+    container_name: vectorizer-embeddings
+    volumes:
+      - embedding_model_cache:/data/hf-cache
+    ports:
+      - "8500:8500"
+    networks: [vectorizer-net]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8500/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # -- FastAPI backend / vectorizer engine -------------------------------------
+  backend:
+    build: ./backend
+    container_name: vectorizer-backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      QWEN_BASE_URL: http://qwen-service:11434
+      EMBEDDING_SERVICE_BASE_URL: http://embedding-service:8500
+    volumes:
+      - state_data:/data/state
+    ports:
+      - "8000:8000"
+    depends_on:
+      qwen-service:
+        condition: service_healthy
+      embedding-service:
+        condition: service_healthy
+    networks: [vectorizer-net]
+
+  # -- React dark-mode UI, served over HTTPS on 443 ----------------------------
+  frontend:
+    build: ./frontend
+    container_name: vectorizer-frontend
+    ports:
+      - "443:443"
+    # To use a real certificate instead of the self-signed one baked in at
+    # build time, uncomment and point these at your cert/key:
+    # volumes:
+    #   - ./ssl/cert.pem:/etc/nginx/ssl/cert.pem:ro
+    #   - ./ssl/key.pem:/etc/nginx/ssl/key.pem:ro
+    depends_on:
+      - backend
+    networks: [vectorizer-net]
+
+networks:
+  vectorizer-net:
+    driver: bridge
+
+volumes:
+  ollama_data:
+  embedding_model_cache:
+  state_data:

@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+package-lock.json
+.DS_Store
+data/
+*.log
+ssl/*.pem
