@@ -457,7 +457,7 @@
                 <!-- Welcome Message -->
                 <div class="text-center mb-12">
                     <h2 class="text-3xl font-semibold text-gray-900 mb-4">How can Couchbase’s MCP assistant help today?</h2>
-                    <p class="text-gray-600 text-lg max-w-2xl mx-auto">Compare unfiltered MCP tool selection with Couchbase vector filtering, both running on a local LLM, for claims, policy, underwriting, and service operations.</p>
+                    <p class="text-gray-600 text-lg max-w-3xl mx-auto">Compare unfiltered MCP tool selection with Couchbase vector filtering for AI agents. Multi-modal AI agents with numerous MCP servers, can have hundreds of tools to choose from. Without MCP tool selection based on vector filtering, each agent MCP tool search request will be sent to the LLM to select the tool. Zero cost and sub-millisecond latency from Couchbase vector filtering for MCP tool selection in AI agents is a game changer.</p>
                 </div>
                
                 <!-- Query Input Box -->
@@ -576,6 +576,16 @@
                 </button>
             </div>
 
+            <!-- How to read the results -->
+            <div class="mb-6 bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                <div class="text-xs font-semibold text-emerald-800 uppercase tracking-wide mb-2">How to read the results</div>
+                <p class="text-xs text-emerald-700 leading-relaxed">
+                    <strong>Tool Selector</strong> is how many candidate tools Couchbase's vector search narrowed the full catalog down to, before the LLM ever sees them.
+                    <strong>Tools Called / Tools Selected</strong> is what the LLM actually decided to invoke - it can use fewer than it was given.
+                    The two panels run separate LLM calls against different tool catalogs (all 178 tools vs. Couchbase's filtered candidates), so their picks aren't expected to match.
+                </p>
+            </div>
+
             <div class="flex-1 flex flex-col justify-center">
                 <div x-show="currentQuery.trim()" class="space-y-4">
                     <!-- Query Message Box -->
@@ -644,13 +654,19 @@
                                 </div>
                             </div>
                             <div class="flex items-center gap-2">
-                                <div class="status-indicator" 
+                                <div class="status-indicator"
                                      :class="baseline.isRunning ? 'status-active' : baseline.tokens > 0 ? 'status-complete' : 'status-pending'"></div>
                                 <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Traditional</span>
                             </div>
                         </div>
                     </div>
-                    
+
+                    <!-- Error Banner: a failed request should never look like a free/zero-cost result -->
+                    <div x-show="baseline.hasError" class="mx-6 mt-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+                        <span class="font-semibold">Request failed - metrics below are not valid:</span>
+                        <span x-text="baseline.errorMessage"></span>
+                    </div>
+
                     <!-- Pipeline Visualization -->
                     <div class="flex-1 p-6">
                         <div class="flex items-center justify-between mb-8">
@@ -893,13 +909,19 @@
                                 </div>
                             </div>
                             <div class="flex items-center gap-2">
-                                <div class="status-indicator" 
-                                     :class="optimized.isRunning ? 'status-active' : 
+                                <div class="status-indicator"
+                                     :class="optimized.isRunning ? 'status-active' :
                                              optimized.cacheStatus === 'HIT' || optimized.tokens > 0 ? 'status-complete' : 'status-pending'"></div>
                             </div>
                         </div>
                     </div>
-                    
+
+                    <!-- Error Banner: a failed request should never look like a free/zero-cost result -->
+                    <div x-show="optimized.hasError" class="mx-6 mt-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+                        <span class="font-semibold">Request failed - metrics below are not valid:</span>
+                        <span x-text="optimized.errorMessage"></span>
+                    </div>
+
                     <!-- Pipeline Visualization -->
                     <div class="flex-1 p-6">
                         <div class="flex items-center justify-between mb-8">
@@ -1128,9 +1150,9 @@
                             </div>
                         </div>
 
-                        <!-- Tools Called -->
-                        <div x-show="optimized.toolsUsed && optimized.toolsUsed.length > 0">
-                            <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Tools Called</div>
+                        <!-- Tools Selected -->
+                        <div x-show="(optimized.toolsUsed && optimized.toolsUsed.length > 0) || (optimized.filteredTools && optimized.filteredTools.length > 0)">
+                            <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Tools Selected</div>
                             <div id="optimizedToolList" class="space-y-2 max-h-40 overflow-y-auto"></div>
                         </div>
 

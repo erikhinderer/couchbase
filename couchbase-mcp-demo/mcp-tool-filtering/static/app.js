@@ -38,7 +38,9 @@ function demoApp() {
             progress: 0,
             isRunning: false,
             response: '',
-            toolsUsed: []
+            toolsUsed: [],
+            hasError: false,
+            errorMessage: ''
         },
 
         optimized: {
@@ -54,7 +56,9 @@ function demoApp() {
             vectorSearchTime: 0,
             selectedTools: [],
             toolsUsed: [],
-            filteredTools: []
+            filteredTools: [],
+            hasError: false,
+            errorMessage: ''
         },
 
         // Metrics - calculated from actual results
@@ -234,16 +238,21 @@ function demoApp() {
                 this.baseline.cost = Number(data.cost ?? 0);
                 this.baseline.response = data.response || '';
                 this.baseline.toolsUsed = data.tools_used || [];
-                
+                this.baseline.hasError = false;
+                this.baseline.errorMessage = '';
+
                 // Show tool execution for baseline (always executes tools)
                 this.showToolExecution('baseline', this.baseline.toolsUsed);
-                
+
             } catch (error) {
                 console.error('Baseline API call failed:', error);
                 this.baseline.response = `LLM error: ${error.message}. Ensure the ollama service is running and OLLAMA_MODEL is pulled, then use Settings > Reconnect to LLM.`;
                 this.updateToolList('baselineToolList', [], true);
-                // Set default values on error
-                this.baseline.toolCount = 84;
+                // The metrics below are meaningless when the request failed - flag it
+                // clearly instead of letting a fake $0.00/0-token result look legitimate.
+                this.baseline.hasError = true;
+                this.baseline.errorMessage = error.message;
+                this.baseline.toolCount = 0;
                 this.baseline.tokens = 0;
                 this.baseline.latency = '0';
                 this.baseline.cost = 0;
@@ -293,7 +302,9 @@ function demoApp() {
                 this.optimized.vectorSearchTime = data.vector_search_time || 0;
                 this.optimized.toolsUsed = data.tools_used || [];
                 this.optimized.filteredTools = data.filtered_tools || [];
-                
+                this.optimized.hasError = false;
+                this.optimized.errorMessage = '';
+
                 // Update cache stats if cache hit
                 if (data.cache_status === 'HIT') {
                     this.cacheStats.totalItems = (this.cacheStats.totalItems || 0) + 1;
@@ -302,16 +313,30 @@ function demoApp() {
                 // Handle cache hit vs tool execution
                 if (this.optimized.cacheStatus === 'HIT') {
                     this.showCacheHit(data.similarity);
+                    // Still show which tools produced this cached response
+                    this.updateToolList('optimizedToolList', this.optimized.toolsUsed);
                 } else {
-                    this.showToolExecution('optimized', this.optimized.toolsUsed);
+                    // Prefer the tools the LLM actually invoked. Very small local
+                    // models can occasionally return zero tool calls even when
+                    // Couchbase's vector search found good candidates - fall back
+                    // to those candidates so "Tools Selected" still reflects what
+                    // Couchbase surfaced, instead of showing nothing.
+                    const toolsToShow = this.optimized.toolsUsed.length > 0
+                        ? this.optimized.toolsUsed
+                        : this.optimized.filteredTools;
+                    this.showToolExecution('optimized', toolsToShow);
                 }
                 
             } catch (error) {
                 console.error('Optimized API call failed:', error);
                 this.optimized.response = `LLM error: ${error.message}`;
                 this.updateToolList('optimizedToolList', [], true);
-                // Set default values on error
-                this.optimized.toolCount = 3;
+                // The metrics below are meaningless when the request failed - flag it
+                // clearly instead of letting a fake $0.00/0-token result look like a
+                // legitimate (and suspiciously perfect) cache hit or free response.
+                this.optimized.hasError = true;
+                this.optimized.errorMessage = error.message;
+                this.optimized.toolCount = 0;
                 this.optimized.tokens = 0;
                 this.optimized.latency = '0';
                 this.optimized.cost = 0;
@@ -560,7 +585,9 @@ function demoApp() {
                 progress: 0,
                 isRunning: false,
                 response: '',
-                toolsUsed: []
+                toolsUsed: [],
+                hasError: false,
+                errorMessage: ''
             };
 
             this.optimized = {
@@ -576,9 +603,11 @@ function demoApp() {
                 vectorSearchTime: 0,
                 selectedTools: [],
                 toolsUsed: [],
-                filteredTools: []
+                filteredTools: [],
+                hasError: false,
+                errorMessage: ''
             };
-            
+
             // Clear tool lists
             this.updateToolList('baselineToolList', []);
             this.updateToolList('optimizedToolList', []);

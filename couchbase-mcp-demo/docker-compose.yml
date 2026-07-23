@@ -1,25 +1,43 @@
 services:
   couchbase:
-    image: couchbase:community-7.6.2
+    # Enterprise Edition, not Community: Couchbase's vector-search (kNN/FTS
+    # vector fields) - the core feature this demo showcases - is an
+    # Enterprise/Capella-only capability. Community Edition rejects vector
+    # index creation outright ("vector typed fields not supported in this
+    # cluster"), which silently degrades every vector search to 0 results.
+    # Enterprise Edition is free to run for development/testing (not
+    # production) - no license key needed for this use case. See README.
+    image: couchbase:enterprise-7.6.2
     container_name: couchbase-mcp-couchbase
+    restart: unless-stopped
     ports:
       - "8091-8096:8091-8096"
       - "11210:11210"
     volumes:
       - couchbase-data:/opt/couchbase/var
     healthcheck:
-      test: ["CMD", "curl", "-f", "-u", "${COUCHBASE_USERNAME:-Administrator}:${COUCHBASE_PASSWORD:-CouchbaseDemo123!}", "http://localhost:8091/pools"]
+      # No -f here on purpose: this Couchbase Server version returns 401 on
+      # unauthenticated /pools (curl -f treats that as a hard failure and
+      # would never succeed, regardless of how healthy the server is). We
+      # just need to confirm the HTTP server is actually answering - a real
+      # connection failure/timeout still fails this check correctly.
+      test: ["CMD", "curl", "-s", "-o", "/dev/null", "http://localhost:8091/pools"]
       interval: 10s
       timeout: 10s
       retries: 30
       start_period: 60s
 
   couchbase-init:
-    image: couchbase:community-7.6.2
+    # Same image/edition as `couchbase` above (must match) - see that
+    # service's comment for why this needs to be Enterprise Edition.
+    image: couchbase:enterprise-7.6.2
     container_name: couchbase-mcp-couchbase-init
+    # Plain (unconditioned) dependency: only controls start order, not
+    # readiness - init.sh polls couchbase:8091 itself before doing anything.
+    # See the note on the `app` service for why we don't rely on
+    # `condition: service_healthy` here.
     depends_on:
-      couchbase:
-        condition: service_healthy
+      - couchbase
     volumes:
       - ./couchbase-init/init.sh:/init.sh:ro
     environment:
@@ -28,28 +46,31 @@ services:
       COUCHBASE_BUCKET: ${COUCHBASE_BUCKET:-mcp_demo}
       COUCHBASE_SCOPE: ${COUCHBASE_SCOPE:-mcp_demo}
     entrypoint: ["/bin/sh", "/init.sh"]
-    restart: "no"
+    restart: on-failure:3
 
   ollama:
     image: ollama/ollama:latest
     container_name: couchbase-mcp-ollama
+    restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 30
-      start_period: 30s
+      start_period: 20s
 
   ollama-pull:
     image: ollama/ollama:latest
     container_name: couchbase-mcp-ollama-pull
+    # Plain (unconditioned) dependency - see note on `app` below. The
+    # command polls `ollama list` itself before pulling, so it doesn't
+    # need Compose's condition-based wait to be correct.
     depends_on:
-      ollama:
-        condition: service_healthy
+      - ollama
     volumes:
       - ollama-data:/root/.ollama
     environment:
@@ -57,22 +78,33 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - "ollama pull ${OLLAMA_MODEL:-llama3.1:8b}"
-    restart: "no"
+      - |
+        until ollama list > /dev/null 2>&1; do
+          echo "[ollama-pull] Waiting for Ollama runtime..."
+          sleep 2
+        done
+        ollama pull ${OLLAMA_MODEL:-llama3.1:8b}
+    restart: on-failure:3
 
   app:
     build:
       context: ./mcp-tool-filtering
     container_name: couchbase-mcp-demo
+    restart: unless-stopped
+    # Deliberately NOT using `condition: service_healthy` /
+    # `service_completed_successfully` here. In practice (Docker Desktop's
+    # start/stop toggle, interrupted runs, and even some plain `docker
+    # compose up` sessions) these conditions can fail to trigger the
+    # dependent container's start at all, leaving it stuck in "Created"
+    # indefinitely. A plain list only controls start order (best-effort),
+    # so `app`'s container always actually starts; wait-for-deps.sh (its
+    # entrypoint) is what guarantees it doesn't serve traffic before
+    # Couchbase/Ollama are genuinely ready.
     depends_on:
-      couchbase:
-        condition: service_healthy
-      couchbase-init:
-        condition: service_completed_successfully
-      ollama:
-        condition: service_healthy
-      ollama-pull:
-        condition: service_completed_successfully
+      - couchbase
+      - couchbase-init
+      - ollama
+      - ollama-pull
     ports:
       - "8089:8089"
     environment:

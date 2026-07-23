@@ -397,7 +397,8 @@ Example response format:
                     logger.warning(f"LLM_NO_TOOLS_SELECTED: falling back to top {min(3, len(all_tools))} tools")
                     selected_tools = all_tools[:min(3, len(all_tools))]
                 
-                logger.info(f"LLM_SELECTION_COMPLETE: tools_selected={len(selected_tools)} tools_available={len(all_tools)} selection_rate={len(selected_tools)/len(all_tools):.2%}")
+                selection_rate = (len(selected_tools) / len(all_tools)) if all_tools else 0
+                logger.info(f"LLM_SELECTION_COMPLETE: tools_selected={len(selected_tools)} tools_available={len(all_tools)} selection_rate={selection_rate:.2%}")
                 
                 # Professional analysis logging for demo transparency
                 token_reduction = ((len(all_tools) - len(selected_tools)) / len(all_tools)) * 100 if all_tools else 0
