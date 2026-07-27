@@ -1,0 +1,7 @@
+FROM python:3.11-slim
+WORKDIR /init
+COPY scripts/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY scripts/init_memory.py .
+COPY couchbase-memory/vector_index.json /couchbase-memory/vector_index.json
+CMD ["python", "init_memory.py"]

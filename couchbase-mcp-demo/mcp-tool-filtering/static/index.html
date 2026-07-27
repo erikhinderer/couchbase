@@ -583,6 +583,7 @@
                     <strong>Tool Selector</strong> is how many candidate tools Couchbase's vector search narrowed the full catalog down to, before the LLM ever sees them.
                     <strong>Tools Called / Tools Selected</strong> is what the LLM actually decided to invoke - it can use fewer than it was given.
                     The two panels run separate LLM calls against different tool catalogs (all 178 tools vs. Couchbase's filtered candidates), so their picks aren't expected to match.
+                    <strong>Semantic Caching</strong> only caches read-type requests - queries with words like "create," "send," "update," "add," or "delete" always show <strong>BYPASS</strong> (not MISS) and re-run every time, since caching a write would silently skip the actual action on repeat.
                 </p>
             </div>
 
@@ -959,13 +960,13 @@
                                              :class="optimized.cacheStatus === 'HIT' ? '' : 'grayscale opacity-60'">
                                     </div>
                                     <div class="absolute -top-1 -right-4 px-2 py-1 text-sm font-bold rounded-full shadow-sm"
-                                         :class="optimized.cacheStatus === 'HIT' ? 'bg-blue-600 text-white' : 'bg-stone-400 text-white'">
-                                        <span x-text="optimized.cacheStatus === 'HIT' ? 'HIT' : 'MISS'">MISS</span>
+                                         :class="optimized.cacheStatus === 'HIT' ? 'bg-blue-600 text-white' : optimized.cacheStatus === 'BYPASS' ? 'bg-amber-500 text-white' : 'bg-stone-400 text-white'">
+                                        <span x-text="optimized.cacheStatus === 'HIT' ? 'HIT' : optimized.cacheStatus === 'BYPASS' ? 'BYPASS' : 'MISS'">MISS</span>
                                     </div>
                                 </div>
                                 <div class="text-center">
                                     <div class="font-semibold text-sm transition-all duration-300" :class="optimized.cacheStatus === 'HIT' ? 'text-gray-900' : 'text-gray-400'">Semantic Caching</div>
-                                    <div class="text-xs mt-1 transition-all duration-300" :class="optimized.cacheStatus === 'HIT' ? 'text-gray-500' : 'text-gray-400'"></div>
+                                    <div class="text-xs mt-1 transition-all duration-300" :class="optimized.cacheStatus === 'HIT' ? 'text-gray-500' : 'text-gray-400'" x-text="optimized.cacheStatus === 'BYPASS' ? 'Write op - never cached' : ''"></div>
                                 </div>
                             </div>
                             
