@@ -6,6 +6,8 @@ Couchbase Server **7.2.0 through 8.0.2**.
 
 <img width="1468" height="813" alt="image" src="https://github.com/user-attachments/assets/63eec8cd-64f7-4a9c-be75-3b2d53ea4411" />
 
+Demo Video: https://drive.google.com/file/d/1WoR6mAMBc_fndf4CNhdZeAZmgybRt9A5/view?usp=sharing
+
 ## Architecture
 
 | Component | Tech | Purpose |
