@@ -58,6 +58,37 @@ _PROGRESS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# cbbackupmgr refuses to restore a scope/collection whose name already exists on the
+# destination under a *different* internal id (or vice versa) -- it won't guess whether
+# that's coincidence or the same logical collection, and demands an explicit identity
+# mapping via --map-data instead. This shows up constantly in a repeated-testing
+# workflow like this app's (the same Capella bucket getting torn into / restored into
+# across many migration attempts), since Couchbase never reuses a dropped/recreated
+# collection's id. Rather than surface this as an opaque failure every time, we parse
+# cbbackupmgr's own error text for exactly the bucket/scope/collection it named and
+# retry with a literal "same name on both sides" --map-data entry -- the identity-
+# mapping form Couchbase's own docs give as the fix for this exact message. See
+# _run_backup_restore()'s retry loop below.
+_MAP_DATA_COLLECTION_CONFLICT_RE = re.compile(
+    r"collection '(?P<collection>[^']+)' with id 0x[0-9a-fA-F]+ in the scope '(?P<scope>[^']+)' "
+    r"exists with a different name/id",
+)
+_MAP_DATA_SCOPE_CONFLICT_RE = re.compile(
+    r"scope '(?P<scope>[^']+)' with id 0x[0-9a-fA-F]+ exists with a different name/id",
+)
+# Safety valve: each retry can only ever add mappings for conflicts cbbackupmgr just
+# reported, so this bounds how many distinct scopes/collections we'll auto-reconcile
+# before giving up and surfacing whatever error remains. cbbackupmgr only reports ONE
+# conflicting scope/collection per failed attempt (it fails fast rather than
+# collecting every conflict up front), so this needs to cover the worst-case *count*
+# of scopes/collections in a single bucket, not just a couple of retries -- e.g. the
+# travel-sample bucket alone has well over a dozen (5x tenant_agent_NN scopes with
+# users/bookings collections, plus the inventory scope's airline/airport/hotel/
+# landmark/route collections). Each retry only costs cbbackupmgr a near-instant
+# fail-fast round trip (no data has transferred yet at that point), so a generous cap
+# here is cheap.
+_MAX_MAP_DATA_RETRIES = 40
+
 
 class MigrationEngine:
     def __init__(self, on_progress: ProgressCallback | None = None):
@@ -202,7 +233,7 @@ class MigrationEngine:
         if record.plan.destination.use_external_network:
             dest_host += "?network=external"
         cbbackupmgr = str(Path(settings.couchbase_bin_dir) / "cbbackupmgr")
-        args = [
+        base_args = [
             cbbackupmgr, "restore",
             "--archive", record.backup_record.archive_path,
             "--repo", record.backup_record.repo_name,
@@ -217,18 +248,38 @@ class MigrationEngine:
         # CA cert when present, otherwise --no-ssl-verify rather than failing outright.
         if record.plan.destination.use_tls:
             if record.plan.destination.ca_cert_path:
-                args += ["--cacert", record.plan.destination.ca_cert_path]
+                base_args += ["--cacert", record.plan.destination.ca_cert_path]
             else:
-                args += ["--no-ssl-verify"]
+                base_args += ["--no-ssl-verify"]
+        # Capella's cluster access credentials (the username/password from "Database
+        # Access", not a full cluster Administrator) aren't authorized to drive the
+        # Analytics/Query/Views portions of the backup service's REST API -- cbbackupmgr
+        # still tries to register/transfer that metadata during restore unless told not
+        # to, which surfaces as a confusing "authentication error executing 'POST'
+        # request to '/api/v1/bucket/<bucket>/backup', check credentials" even though
+        # the same credentials are working fine for the KV data restore itself. Per
+        # Couchbase's own "Backup a Self-Managed Cluster and Restore to a Capella
+        # Provisioned Cluster" guide, restoring self-managed -> Capella needs exactly
+        # these five --disable flags (Capella also doesn't support views at all, hence
+        # --disable-views regardless of the credential-permission issue). Using the
+        # explicit flags here instead of cbbackupmgr 7.6+'s shorter --capella alias
+        # since it works across every cbbackupmgr version, matching this app's stated
+        # 7.2.0-8.0.2 support range.
+        if record.plan.destination.is_capella:
+            base_args += [
+                "--disable-analytics", "--disable-cluster-analytics",
+                "--disable-bucket-query", "--disable-cluster-query",
+                "--disable-views",
+            ]
         # The backup archive always contains every bucket from the source cluster
         # (cbbackupmgr backup has no per-bucket filter flag -- see the comment in
         # BackupManager.backup()); bucket selection from the wizard is enforced here
         # instead, at restore time, where --include-data is actually supported.
         if record.backup_record.buckets:
-            args += ["--include-data", ",".join(record.backup_record.buckets)]
+            base_args += ["--include-data", ",".join(record.backup_record.buckets)]
         if record.plan.throttle_mb_per_sec:
-            args += ["--data-rate-limit", str(record.plan.throttle_mb_per_sec)]
-        args += ["--threads", str(record.plan.parallelism)]
+            base_args += ["--data-rate-limit", str(record.plan.throttle_mb_per_sec)]
+        base_args += ["--threads", str(record.plan.parallelism)]
 
         start = time.monotonic()
         record.stats = MigrationStats(docs_total=record.validation_report.source_topology.total_docs or 0
@@ -243,22 +294,66 @@ class MigrationEngine:
                 filter(None, [settings.couchbase_lib_dir, os.environ.get("LD_LIBRARY_PATH")])
             ),
         }
-        proc = await asyncio.create_subprocess_exec(
-            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=env,
-        )
-        assert proc.stdout is not None
-        async for raw_line in proc.stdout:
-            line = raw_line.decode(errors="replace").strip()
-            if not line:
-                continue
-            self._parse_progress_line(record, line, start)
-            if len(record.log_tail) < 200:
-                self._log(record, line)
-            await self._emit(record)
 
-        rc = await proc.wait()
-        if rc != 0:
-            raise RuntimeError(f"cbbackupmgr restore exited with code {rc}")
+        # See _MAP_DATA_COLLECTION_CONFLICT_RE's comment above: a destination bucket
+        # that's been restored into before (extremely common while iterating on a real
+        # Capella cluster like this) can have scopes/collections whose names match the
+        # archive but whose internal ids don't -- cbbackupmgr refuses to guess and asks
+        # for --map-data. We detect that from cbbackupmgr's own output and retry with
+        # an identity mapping (same name on both sides) rather than failing the whole
+        # migration over something this mechanical.
+        map_data_pairs: set[str] = set()
+        attempt = 0
+        while True:
+            attempt += 1
+            args = list(base_args)
+            if map_data_pairs:
+                args += ["--map-data", ",".join(sorted(map_data_pairs))]
+
+            proc = await asyncio.create_subprocess_exec(
+                *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=env,
+            )
+            assert proc.stdout is not None
+            captured_lines: list[str] = []
+            async for raw_line in proc.stdout:
+                line = raw_line.decode(errors="replace").strip()
+                if not line:
+                    continue
+                captured_lines.append(line)
+                self._parse_progress_line(record, line, start)
+                if len(record.log_tail) < 200:
+                    self._log(record, line)
+                await self._emit(record)
+
+            rc = await proc.wait()
+            if rc == 0:
+                break
+
+            output_text = "\n".join(captured_lines)
+            new_pairs: set[str] = set()
+            buckets = record.backup_record.buckets or []
+            for m in _MAP_DATA_COLLECTION_CONFLICT_RE.finditer(output_text):
+                scope, collection = m["scope"], m["collection"]
+                for bucket in buckets:
+                    new_pairs.add(f"{bucket}.{scope}.{collection}={bucket}.{scope}.{collection}")
+            for m in _MAP_DATA_SCOPE_CONFLICT_RE.finditer(output_text):
+                scope = m["scope"]
+                for bucket in buckets:
+                    new_pairs.add(f"{bucket}.{scope}={bucket}.{scope}")
+
+            truly_new = new_pairs - map_data_pairs
+            if not truly_new or attempt >= _MAX_MAP_DATA_RETRIES:
+                raise RuntimeError(f"cbbackupmgr restore exited with code {rc}")
+
+            map_data_pairs |= truly_new
+            self._log(
+                record,
+                "Destination already has scope/collection(s) with matching names but "
+                "different internal ids (typical after re-running migrations against the "
+                "same Capella bucket) -- retrying restore with --map-data to reconcile by "
+                f"name: {', '.join(sorted(truly_new))}",
+            )
+            await self._emit(record)
 
         record.stats.docs_migrated = record.stats.docs_total
         record.stats.elapsed_seconds = time.monotonic() - start

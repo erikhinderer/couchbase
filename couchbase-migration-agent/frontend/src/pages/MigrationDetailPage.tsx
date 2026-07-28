@@ -128,7 +128,14 @@ export default function MigrationDetailPage() {
             version: validation_report.source_topology.cluster_version,
             nodes: validation_report.source_topology.nodes,
             buckets: validation_report.source_topology.buckets,
-            xdcrRemotes: validation_report.source_topology.xdcr_remotes,
+            // Only surface XDCR remotes on the diagram when this migration is actually
+            // using a continuous (XDCR-based) strategy. The source cluster may have
+            // other, unrelated XDCR replications already configured (e.g. left over
+            // from a previous migration attempt, or pre-existing on real infra) --
+            // showing that satellite node for a plain one-time backup/restore
+            // migration was misleading, implying this migration involved XDCR when it
+            // doesn't.
+            xdcrRemotes: isContinuousStrategy ? validation_report.source_topology.xdcr_remotes : undefined,
           }}
           destination={validation_report?.dest_topology && {
             label: plan.destination.label,

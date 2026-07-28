@@ -29,6 +29,7 @@ export default function NewMigrationPage() {
   const [destTopo, setDestTopo] = useState<any>(null);
   const [validation, setValidation] = useState<any>(null);
   const [backupResult, setBackupResult] = useState<any>(null);
+  const isContinuousStrategy = wizard.strategy === "xdcr_live" || wizard.strategy === "hybrid";
 
   async function guarded(fn: () => Promise<void>) {
     setBusy(true);
@@ -171,7 +172,19 @@ export default function NewMigrationPage() {
         >
           <div style={{ marginBottom: 20 }}>
             <ClusterTopologyDiagram
-              source={sourceTopo && { label: wizard.source.label, version: sourceTopo.cluster_version, nodes: sourceTopo.nodes, buckets: sourceTopo.buckets, xdcrRemotes: sourceTopo.xdcr_remotes }}
+              source={sourceTopo && {
+                label: wizard.source.label,
+                version: sourceTopo.cluster_version,
+                nodes: sourceTopo.nodes,
+                buckets: sourceTopo.buckets,
+                // Only show XDCR remotes when this migration is actually using a
+                // continuous (XDCR-based) strategy -- the source cluster may already
+                // have unrelated XDCR replications configured (e.g. from a previous
+                // migration attempt against this same real cluster), and showing that
+                // satellite node here implied this migration involved XDCR even when
+                // "One-time migration" was selected.
+                xdcrRemotes: isContinuousStrategy ? sourceTopo.xdcr_remotes : undefined,
+              }}
               destination={destTopo && { label: wizard.destination.label, isCapella: true, nodes: destTopo.nodes, buckets: destTopo.buckets }}
               phase="validated"
             />
