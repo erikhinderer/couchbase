@@ -4,7 +4,7 @@ A Dockerized AI agent for migrating Couchbase Server clusters — single-node, m
 and Cross Data Center Replication (XDCR) topologies — to Couchbase Capella. Supports
 Couchbase Server **7.2.0 through 8.0.2**.
 
-The Couchbase Migration Agent performs real-time migration bottleneck detection, for backups, cross data center replication (XDCR) during migrations and provides recommendations for remediation, leveraging thread throttling to ensure operational performance.
+The Couchbase Migration Agent performs real-time migration bottleneck detection for backups and cross data center replication (XDCR) during migrations and provides recommendations for remediation, leveraging thread throttling to ensure operational performance.
 
 <img width="1468" height="813" alt="image" src="https://github.com/user-attachments/assets/63eec8cd-64f7-4a9c-be75-3b2d53ea4411" />
 
