@@ -76,23 +76,62 @@ class BackupError(RuntimeError):
     pass
 
 
+class BackupThrottleRequested(Exception):
+    """Raised out of BackupManager.backup() when a still-running backup was
+    deliberately terminated in response to request_abort() -- NOT a real failure.
+    Carries the thread count and finding kind that triggered it so the caller
+    (MigrationEngine.backup_source()'s auto-throttle loop) can relaunch a fresh
+    BackupManager at the lower thread count."""
+
+    def __init__(self, target_threads: int, reason: str):
+        super().__init__(f"backup stopped for auto-throttle to {target_threads} threads ({reason})")
+        self.target_threads = target_threads
+        self.reason = reason
+
+
 class BackupManager:
     """Orchestrates cbbackupmgr config/backup/restore lifecycle for one migration."""
 
     def __init__(
         self, migration_id: UUID, source: ClusterConnectionConfig, buckets: list[str],
-        on_progress: BackupProgressCallback | None = None,
+        on_progress: BackupProgressCallback | None = None, parallelism: int = 1,
+        repo_suffix: str = "",
     ):
         self.migration_id = migration_id
         self.source = source
         self.buckets = buckets
-        self.repo_name = f"migration-{migration_id}"
-        self.archive_path = str(Path(settings.backup_storage_dir) / str(migration_id))
+        # repo_suffix lets a caller give each auto-throttle restart attempt its own
+        # repo/archive (e.g. "-throttle1", "-throttle2") instead of reusing one that a
+        # just-killed cbbackupmgr process left mid-write -- cbbackupmgr has no
+        # supported way to resume a *backup* (unlike restore's own resumability), so
+        # reusing the same repo after an abort risks cbbackupmgr treating it as a
+        # corrupt/incomplete backup rather than starting clean. Defaults to "" so
+        # every other caller (rollback, a normal single-shot backup) is unaffected.
+        self.repo_name = f"migration-{migration_id}{repo_suffix}"
+        self.archive_path = str(Path(settings.backup_storage_dir) / f"{migration_id}{repo_suffix}")
         self._cbbackupmgr = str(Path(settings.couchbase_bin_dir) / "cbbackupmgr")
         # Called (if set) with the live BackupRecord every time backup() parses a new
         # progress tick from cbbackupmgr's output, so the caller (MigrationEngine) can
         # push it out over the websocket for the wizard's live progress bar.
         self._on_progress = on_progress
+        # Previously omitted entirely, which meant every backup silently ran with
+        # whatever cbbackupmgr's own CLI default is, with no way for the wizard's
+        # "parallelism" setting (already used for restore's --threads) to affect it,
+        # and no real configured value for BottleneckMonitor to compare against
+        # Couchbase's own thread-vs-CPU sizing guidance (see bottleneck_detector.py).
+        self.parallelism = max(1, parallelism)
+        # Set by request_abort() (called from the on_progress callback, so from the
+        # same asyncio task that's driving _run_streaming's read loop -- no lock
+        # needed) to signal "stop the subprocess and raise BackupThrottleRequested"
+        # the next time _run_streaming checks, rather than mid-callback.
+        self._abort_request: tuple[int, str] | None = None
+
+    def request_abort(self, target_threads: int, reason: str) -> None:
+        """Ask a currently-running backup() to stop cbbackupmgr and raise
+        BackupThrottleRequested(target_threads, reason) once it's done so, so the
+        caller can relaunch at a lower thread count. Safe to call from within the
+        on_progress callback passed to this instance."""
+        self._abort_request = (target_threads, reason)
 
     def _conn_host(self) -> str:
         # IMPORTANT: do NOT strip the couchbase://couchbases:// scheme here. Per
@@ -157,7 +196,13 @@ class BackupManager:
         pushing it to self._on_progress as it goes -- see the _PROGRESS_*_RE patterns
         above. Returns (exit_code, full_captured_output) once the process exits;
         full_captured_output is still needed on failure since error text (and, for
-        restore, the --map-data conflict details) shows up as regular lines here too."""
+        restore, the --map-data conflict details) shows up as regular lines here too.
+
+        Also checks request_abort() after every on_progress call: if set, this stops
+        cbbackupmgr itself (SIGTERM, then SIGKILL after a grace period if it hasn't
+        exited) and raises BackupThrottleRequested instead of returning normally --
+        the caller relaunches at a lower thread count rather than treating this as a
+        failed backup."""
         cmd = [self._cbbackupmgr, *args]
         logger.info("Running: %s", " ".join(shlex.quote(a) for a in cmd if "password" not in a.lower()))
         env = {
@@ -179,8 +224,26 @@ class BackupManager:
             captured.append(line)
             if self._on_progress and self._apply_progress_line(record, line, start):
                 await self._on_progress(record)
+            if self._abort_request is not None:
+                await self._terminate(proc)
+                target_threads, reason = self._abort_request
+                raise BackupThrottleRequested(target_threads, reason)
         rc = await proc.wait()
         return rc, "\n".join(captured)
+
+    @staticmethod
+    async def _terminate(proc: asyncio.subprocess.Process) -> None:
+        """Stop a still-running cbbackupmgr process gracefully, falling back to a
+        hard kill if it doesn't exit promptly -- used only by the auto-throttle abort
+        path above, never on a normal completion/failure."""
+        if proc.returncode is not None:
+            return
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
 
     @staticmethod
     def _apply_progress_line(record: BackupRecord, line: str, start: float) -> bool:
@@ -243,10 +306,23 @@ class BackupManager:
             "backup", "--archive", self.archive_path, "--repo", self.repo_name,
             "--cluster", self._cluster_arg(),
             "--username", self.source.username, "--password", self.source.password,
+            "--threads", str(self.parallelism),
             *self._tls_args(),
         ]
 
-        rc, output = await self._run_streaming(record, *args)
+        try:
+            rc, output = await self._run_streaming(record, *args)
+        except BackupThrottleRequested:
+            # Not a failure -- the running cbbackupmgr was stopped on purpose so the
+            # caller can relaunch a fresh BackupManager at a lower thread count. Mark
+            # the record so the UI shows something more informative than "failed" for
+            # the brief moment before the new attempt's own progress starts arriving.
+            record.status = BackupStatus.THROTTLING
+            record.completed_at = datetime.utcnow()
+            if self._on_progress:
+                await self._on_progress(record)
+            raise
+
         record.completed_at = datetime.utcnow()
         if rc != 0:
             record.status = BackupStatus.FAILED
@@ -272,6 +348,7 @@ class BackupManager:
             "--cluster", self._cluster_arg(),
             "--username", self.source.username, "--password", self.source.password,
             "--force-updates",
+            "--threads", str(self.parallelism),
             *self._tls_args(),
         ]
         rc, out, err = await self._run(*args)

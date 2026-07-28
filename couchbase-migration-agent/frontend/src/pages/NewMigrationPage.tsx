@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWizardStore } from "@/store/wizardStore";
 import StepIndicator from "@/components/wizard/StepIndicator";
@@ -20,6 +20,17 @@ const STRATEGY_LABELS: Record<string, string> = {
   xdcr_live: "Continuous replication",
   hybrid: "Bulk copy + continuous sync",
 };
+
+// "throttling" is a brief, intentional state -- the agent detected the backup was
+// oversubscribing the source cluster's CPU/memory and is stopping/relaunching
+// cbbackupmgr with fewer threads (see the auto-throttle loop in
+// MigrationEngine.backup_source()), not a failure. Treated like "running" for
+// gating purposes (still in progress, don't let the user start a second backup or
+// continue past this step) but shown with its own message below instead of the
+// normal progress bar, since the new attempt's progress resets to 0%.
+function isBackupActive(status?: string): boolean {
+  return status === "running" || status === "throttling";
+}
 
 /** Renders a Go-style duration (seconds) the way the rest of the app phrases ETAs. */
 function formatEta(seconds?: number | null): string {
@@ -60,6 +71,22 @@ export default function NewMigrationPage() {
   // fall back to the final result from the HTTP response (e.g. right after page
   // load, before any socket frame has arrived yet, or if the socket briefly drops).
   const displayedBackup = liveBackup ?? backupResult;
+
+  // Safety net for landing on /new any way other than clicking the "New Migration"
+  // nav item / dashboard button (both of which already call wizard.reset() directly
+  // on click, e.g. via browser back/forward or a bookmarked/typed URL): the wizard
+  // store is a global Zustand store that otherwise survives navigation, so without
+  // this a fresh mount here could silently resume mid-wizard (wrong step, stale
+  // source/destination/strategy values) from whatever a previous migration left
+  // behind. Guarded with a ref so React 18 StrictMode's dev-only double-invoke
+  // doesn't do anything worse than reset twice.
+  const didReset = useRef(false);
+  useEffect(() => {
+    if (didReset.current) return;
+    didReset.current = true;
+    wizard.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function guarded(fn: () => Promise<void>) {
     setBusy(true);
@@ -249,19 +276,22 @@ export default function NewMigrationPage() {
             A full backup of the source cluster is taken before any data is transferred.
             If the migration fails, or you cancel it, the source is rolled back to this
             exact backup — the source cluster is never left in a partially-migrated state.
+            If the agent detects the backup is overloading the source cluster's CPU or
+            memory, it will automatically restart it with fewer threads (see the agent
+            panel for details) rather than needing you to intervene.
           </p>
           <div style={{ marginTop: 16 }}>
             {/* backupMigration() now only schedules the backup and returns almost
                 instantly (see handleBackup()'s comment), so `busy` alone would only
                 disable this button for a moment -- also disable/label off the
-                websocket-driven displayedBackup.status so a still-running backup
-                can't be started twice from a second click. */}
+                websocket-driven displayedBackup.status so a still-running (or
+                auto-throttling) backup can't be started twice from a second click. */}
             <button
               className="cb-btn"
               onClick={handleBackup}
-              disabled={busy || displayedBackup?.status === "running"}
+              disabled={busy || isBackupActive(displayedBackup?.status)}
             >
-              {busy || displayedBackup?.status === "running"
+              {busy || isBackupActive(displayedBackup?.status)
                 ? "Backing up…"
                 : displayedBackup?.status === "failed"
                 ? "Retry backup (cbbackupmgr)"
@@ -276,7 +306,19 @@ export default function NewMigrationPage() {
             {displayedBackup?.status === "running" && (
               <span className="cb-badge cb-badge-progress" style={{ marginLeft: 10 }}>Running</span>
             )}
+            {displayedBackup?.status === "throttling" && (
+              <span className="cb-badge cb-badge-warning" style={{ marginLeft: 10 }}>Auto-throttling</span>
+            )}
           </div>
+
+          {displayedBackup?.status === "throttling" && (
+            <div className="cb-card" style={{ padding: 12, marginTop: 16, maxWidth: 560 }}>
+              <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                The agent detected the backup was overloading the source cluster and is
+                restarting it now with fewer threads — see the agent panel for what it found.
+              </span>
+            </div>
+          )}
 
           {displayedBackup?.status === "running" && (
             <div style={{ marginTop: 16, maxWidth: 560 }}>
@@ -343,7 +385,7 @@ export default function NewMigrationPage() {
       )}
 
       {wizard.step === 4 && (
-        <StepShell title="Review & approve" onBack={() => wizard.setStep(3)} onNext={handleApprove} nextDisabled={busy} nextLabel="Approve & start migration">
+        <StepShell title="Review & approve" onBack={() => wizard.setStep(3)} onNext={handleApprove} nextDisabled={busy} nextLabel="Approve & View Migration to Start">
           <div className="cb-card" style={{ padding: 16, maxWidth: 560, fontSize: 13, lineHeight: 1.8 }}>
             <div><b>Migration:</b> {wizard.migrationName}</div>
             <div><b>Source:</b> {wizard.source.label} ({wizard.source.connection_string})</div>

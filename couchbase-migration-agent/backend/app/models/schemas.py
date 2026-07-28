@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, computed_field, field_validator
 
 from app.models.enums import (
     BackupStatus,
+    BottleneckKind,
     ClusterTopologyType,
     MigrationPhase,
     MigrationStrategy,
@@ -228,6 +229,37 @@ class MigrationStats(BaseModel):
     last_replication_poll: Optional[datetime] = None
 
 
+class BottleneckFinding(BaseModel):
+    """A single detected backup/restore bottleneck, produced by BottleneckMonitor
+    (backend/app/core/bottleneck_detector.py) while a migration is actively running.
+    For the BACKUP phase, a thread-actionable finding (CPU saturation, thread
+    oversubscription, memory pressure) is handled automatically -- the agent stops
+    and relaunches the backup at a lower --threads value (see
+    MigrationEngine.backup_source()'s auto-throttle retry loop); auto_remediated is
+    True on the follow-up finding that reports what it did. Everything else --
+    restore-phase findings (the destination side isn't under this app's process
+    control the way the backup subprocess it launched is) and throughput
+    stall/degraded findings on either phase (a threads change doesn't fix a network
+    problem) -- stays diagnosis + suggestion only, same as before. Surfaced to the
+    user via the websocket and proactively in the Ask The Agent panel."""
+    finding_id: UUID = Field(default_factory=uuid4)
+    kind: BottleneckKind
+    phase: str  # "backup" or "restore" -- which leg of the pipeline this concerns
+    cluster_label: str  # which cluster (source/destination label) this concerns
+    message: str  # what was observed, with the metric(s) that triggered it
+    suggestion: str  # concrete, actionable remediation text (or, if auto_remediated, what was just done)
+    detected_at: datetime = Field(default_factory=datetime.utcnow)
+    # Only meaningful for thread-actionable kinds (CPU_SATURATED/THREAD_OVERSUBSCRIBED/
+    # MEMORY_PRESSURE): the --threads value Couchbase's own backup-service sizing
+    # formula (max(1, cpu_cores * 0.75)) recommends for the busiest node observed.
+    recommended_threads: Optional[int] = None
+    # True only on the follow-up finding posted once the agent has actually stopped
+    # and relaunched a backup at a lower thread count -- never set on the initial
+    # detection finding, and never set for restore-phase or stall/degraded findings,
+    # which the agent can't and doesn't act on by itself.
+    auto_remediated: bool = False
+
+
 class MigrationRecord(BaseModel):
     migration_id: UUID = Field(default_factory=uuid4)
     plan: MigrationPlanCreate
@@ -241,6 +273,7 @@ class MigrationRecord(BaseModel):
     stats: MigrationStats = Field(default_factory=MigrationStats)
     log_tail: list[str] = Field(default_factory=list)
     error_message: Optional[str] = None
+    bottleneck_findings: list[BottleneckFinding] = Field(default_factory=list)
 
 
 class MigrationApproval(BaseModel):

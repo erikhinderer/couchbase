@@ -4,69 +4,7 @@ A Dockerized AI agent for migrating Couchbase Server clusters — single-node, m
 and Cross Data Center Replication (XDCR) topologies — to Couchbase Capella. Supports
 Couchbase Server **7.2.0 through 8.0.2**.
 
-The Couchbase Migration Agent performs real-time migration bottleneck detection for backups and cross data center replication (XDCR) during migrations and provides recommendations for remediation, leveraging thread throttling to ensure operational performance.
-
 <img width="1468" height="813" alt="image" src="https://github.com/user-attachments/assets/63eec8cd-64f7-4a9c-be75-3b2d53ea4411" />
-
-*Demo Video: https://drive.google.com/file/d/1WoR6mAMBc_fndf4CNhdZeAZmgybRt9A5/view?usp=sharing
-
-## Architecture
-
-| Component | Tech | Purpose |
-|---|---|---|
-| `frontend/` | React + TypeScript + Vite | Dark-mode UI: setup wizard, topology diagrams, live stats dashboard, agent chat |
-| `backend/` | Couchbase SDK + FastAPI (Python) | REST + WebSocket API, validation, migration orchestration, backup/rollback |
-| `qwen-service/` | Ollama serving Qwen 3.8 | Local LLM for the in-app migration assistant and memory embeddings — nothing leaves the Docker network |
-| `couchbase-memory/` | Couchbase Enterprise Edition (free, dev/test license) | Agent long-term memory (past validations, decisions, incidents), recalled via native vector search |
-| `scripts/init_memory.py` | Python | One-shot bootstrap: creates the memory bucket/scope/collection and the FTS vector index |
-
-> **Enterprise Edition, free for dev/test:** `couchbase-memory` runs `couchbase:enterprise-*`
-> so native ANN vector search (FTS vector index) is available for agent-memory semantic
-> recall. Couchbase's Enterprise Free license lets you download and run Enterprise Edition
-> at no cost for internal development, testing, and evaluation; it only converts to a paid
-> subscription if you use it in production or request Couchbase support — see
-> https://www.couchbase.com/legal/agreements/ for the exact terms. If that doesn't fit your
-> use case, point `MEMORY_CB_*` at Couchbase Capella instead (also has native vector search,
-> fully managed, no code changes needed). `AgentMemoryStore.recall()`
-> (`backend/app/memory/couchbase_memory.py`) falls back to a N1QL query + in-process
-> cosine-similarity scan if the vector index is ever momentarily unavailable, purely as a
-> resilience net — it's not the expected steady-state path.
-
-### Migration Pipeline Modes
-
-Every migration always starts the same way — validate the source/destination, back up
-the source, and require human approval — regardless of how data is transferred:
-
-```
-validate → backup (cbbackupmgr, source) → await user approval → [replication mode] → …
-                 ↳ rollback available at any gated step (restores source from backup)
-```
-
-At the wizard's **Destination & Mode** step, the user picks one of three replication
-modes (`MigrationStrategy`):
-
-| Mode | User-facing label | What happens | Terminal state |
-|---|---|---|---|
-| `backup_restore` | **One-time migration** | `cbbackupmgr restore` targets the destination once | `COMPLETE` after transfer + verification |
-| `xdcr_live` | **Continuous replication** | XDCR is configured from source → destination and left running indefinitely, starting right after approval | `REPLICATING` (ongoing) until the user stops it |
-| `hybrid` | **Bulk copy + continuous sync** | One-time `cbbackupmgr restore` for existing data, then XDCR takes over for the ongoing delta | `REPLICATING` (ongoing) until the user stops it |
-
-For the two continuous modes, the migration detail page exposes two controls once
-replication is live:
-- **Cutover & complete** — stops XDCR, verifies the destination, and marks the migration
-  `COMPLETE` (destination becomes the system of record).
-- **Stop replication** — stops XDCR without cutover; the migration ends in `STOPPED` and
-  the source remains authoritative.
-
-Live replication stats (mutations/sec, changes left, estimated time to catch up) are
-polled from Couchbase's XDCR task API every few seconds and streamed to the dashboard
-over the same websocket used for one-time transfer progress.
-
-One-time transfers use `cbbackupmgr backup` against the source, then `cbbackupmgr
-restore` targeting the destination (Capella or on-prem) — Couchbase's documented path
-for cluster migration. XDCR-replicated topologies already present on the source are also
-detected automatically during validation and surfaced in the topology diagram, regardless
-of which replication mode is chosen for the migration itself.
 
 ## Quick start
 
@@ -86,8 +24,6 @@ docker compose up --build
 First boot pulls the Qwen model (`qwen3:8b` by default) and initializes the Couchbase
 Enterprise Edition memory store — this can take a few minutes; subsequent starts are fast
 (cached in the `ollama_data` / `couchbase_memory_data` volumes).
-
-If you plan to access the UI from other than http://localhost:5173 (a LAN IP, a different hostname, a remote box), you need to configure the backend's CORS_ORIGINS and the frontend's VITE_API_BASE_URL/VITE_WS_BASE_URL with the host DNS name or IP address in the .env file. Set all three in .env with the appropriate IP or DNS name, then rebuild -- VITE_API_BASE_URL/VITE_WS_BASE_URL are baked into the frontend's JS at build time by Vite, so docker compose up --build (not a plain up, and not a container restart) is required for a change to take effect. See the .env comments for the exact variables.
 
 ## Step-by-step wizard guide
 
@@ -165,14 +101,20 @@ green badge means the app actually talked to that cluster successfully.
   backup's status is `complete` — a failed backup can't silently carry you into approval.
 - The migration cannot be approved until this backup succeeds; it's also what rollback
   restores the source to if anything downstream goes wrong.
+- If the agent detects the backup is overloading the source cluster's CPU, memory, or
+  thread budget, it automatically restarts the backup with fewer threads and posts what it
+  did in the Ask The Agent panel, which opens on its own — no action needed from you. Any
+  bottleneck it can't fix by itself (e.g. a stalled or degraded transfer that isn't a
+  thread-count problem) shows up there too, as a suggestion instead. See "Bottleneck
+  detection" below.
 
 ### 5. Review & approve
 
 - A summary card recaps the migration name, source, destination, replication mode, and
   backup status for one last check before anything is transferred.
-- Clicking **Approve & start migration** only approves the migration here — a named human
-  sign-off that records who approved it and when — and takes you to the migration's detail
-  page. It does not start the transfer by itself despite the label; that's the next step.
+- Clicking **Approve & View Migration to Start** approves the migration here — a named
+  human sign-off that records who approved it and when — and takes you to the migration's
+  detail page, where a separate **Start migration** button actually begins the transfer.
 
 ### 6. Start migration
 
@@ -184,6 +126,126 @@ green badge means the app actually talked to that cluster successfully.
   same topology diagram. One-time migrations run to `complete` on their own; continuous
   modes settle into `replicating` and stay there until you stop them (cutover or halt) from
   this same page.
+- The agent keeps watching for bottlenecks during the restore too, but restore-phase
+  findings are always a suggestion in the Ask The Agent panel rather than an automatic
+  fix — see "Bottleneck detection" for why backup and restore are handled differently here.
+
+## Architecture
+
+| Component | Tech | Purpose |
+|---|---|---|
+| `frontend/` | React + TypeScript + Vite | Dark-mode UI: setup wizard, topology diagrams, live stats dashboard, agent chat |
+| `backend/` | FastAPI (Python) | REST + WebSocket API, validation, migration orchestration, backup/rollback |
+| `qwen-service/` | Ollama serving Qwen 3.8 | Local LLM for the in-app migration assistant and memory embeddings — nothing leaves the Docker network |
+| `couchbase-memory/` | Couchbase Enterprise Edition (free, dev/test license) | Agent long-term memory (past validations, decisions, incidents), recalled via native vector search |
+| `scripts/init_memory.py` | Python | One-shot bootstrap: creates the memory bucket/scope/collection and the FTS vector index |
+
+> **Enterprise Edition, free for dev/test:** `couchbase-memory` runs `couchbase:enterprise-*`
+> so native ANN vector search (FTS vector index) is available for agent-memory semantic
+> recall. Couchbase's Enterprise Free license lets you download and run Enterprise Edition
+> at no cost for internal development, testing, and evaluation; it only converts to a paid
+> subscription if you use it in production or request Couchbase support — see
+> https://www.couchbase.com/legal/agreements/ for the exact terms. If that doesn't fit your
+> use case, point `MEMORY_CB_*` at Couchbase Capella instead (also has native vector search,
+> fully managed, no code changes needed). `AgentMemoryStore.recall()`
+> (`backend/app/memory/couchbase_memory.py`) falls back to a N1QL query + in-process
+> cosine-similarity scan if the vector index is ever momentarily unavailable, purely as a
+> resilience net — it's not the expected steady-state path.
+
+### Migration Pipeline Modes
+
+Every migration always starts the same way — validate the source/destination, back up
+the source, and require human approval — regardless of how data is transferred:
+
+```
+validate → backup (cbbackupmgr, source) → await user approval → [replication mode] → …
+                 ↳ rollback available at any gated step (restores source from backup)
+```
+
+At the wizard's **Destination & Mode** step, the user picks one of three replication
+modes (`MigrationStrategy`):
+
+| Mode | User-facing label | What happens | Terminal state |
+|---|---|---|---|
+| `backup_restore` | **One-time migration** | `cbbackupmgr restore` targets the destination once | `COMPLETE` after transfer + verification |
+| `xdcr_live` | **Continuous replication** | XDCR is configured from source → destination and left running indefinitely, starting right after approval | `REPLICATING` (ongoing) until the user stops it |
+| `hybrid` | **Bulk copy + continuous sync** | One-time `cbbackupmgr restore` for existing data, then XDCR takes over for the ongoing delta | `REPLICATING` (ongoing) until the user stops it |
+
+For the two continuous modes, the migration detail page exposes two controls once
+replication is live:
+- **Cutover & complete** — stops XDCR, verifies the destination, and marks the migration
+  `COMPLETE` (destination becomes the system of record).
+- **Stop replication** — stops XDCR without cutover; the migration ends in `STOPPED` and
+  the source remains authoritative.
+
+Live replication stats (mutations/sec, changes left, estimated time to catch up) are
+polled from Couchbase's XDCR task API every few seconds and streamed to the dashboard
+over the same websocket used for one-time transfer progress.
+
+One-time transfers use `cbbackupmgr backup` against the source, then `cbbackupmgr
+restore` targeting the destination (Capella or on-prem) — Couchbase's documented path
+for cluster migration. XDCR-replicated topologies already present on the source are also
+detected automatically during validation and surfaced in the topology diagram, regardless
+of which replication mode is chosen for the migration itself.
+
+### Bottleneck detection
+
+While a backup or restore is actively running, the agent watches for the bottleneck
+patterns Couchbase's own support guidance calls out most often, and surfaces anything it
+finds in the Ask The Agent panel — the panel opens on its own, so nothing needs to be
+actively watched for this to work. Detection draws on two Couchbase sources:
+["Troubleshooting Slow Couchbase Backup and Restore Processes"](https://support.couchbase.com/hc/en-us/articles/24941535204763)
+for the causes it checks for, and the Backup Service's own thread-vs-CPU sizing formula
+from ["Manage Backup Service Threads"](https://docs.couchbase.com/server/current/rest-api/backup-node-threads.html)
+(`max(1, cpu_cores × 0.75)`) for one of the concrete thresholds.
+
+What's checked, using data the app is already streaming or already has REST access to:
+
+- **Stalled throughput** — transfer rate has been essentially zero for a sustained window,
+  which usually points at a dropped connection rather than a merely slow one.
+- **Degraded throughput** — rate has dropped well below this run's own peak for a sustained
+  window, the pattern the support article associates with CPU/memory contention or network
+  instability.
+- **CPU saturation** — a relevant cluster node is running hot (~90%+) while the transfer is
+  active.
+- **Thread oversubscription** — the configured `--threads` value (the wizard's
+  "parallelism" setting) is already above Couchbase's own recommended sizing for that
+  node's CPU core count, even before CPU is fully saturated.
+- **Memory pressure** — a relevant node is critically low on free memory during the
+  transfer.
+
+**During a backup, the first three of those are handled automatically.** CPU saturation,
+thread oversubscription, and memory pressure on the *source* cluster all trace back to the
+same lever — `cbbackupmgr`'s `--threads` — and the backup is a subprocess this app itself
+launched and fully controls, so when one of those fires the agent stops that `cbbackupmgr`
+process and relaunches it with Couchbase's own recommended thread count, against a fresh
+backup archive (`cbbackupmgr` has no supported way to resume a *backup* that was killed
+mid-write, unlike restore). The wizard's Backup step shows an "Auto-throttling" badge for
+the few seconds this takes, and the agent panel posts a 🔧 message once it's done — "reduced
+threads from 8 to 3 and restarted the backup" — rather than a suggestion, since it's
+reporting something it already did. This only ever throttles *down*, never below 1 thread,
+and caps itself at 3 restarts per backup; if the cluster is still saturated after that,
+throttling stops and the last detection finding stands as a plain suggestion instead, same
+as everything else below.
+
+Everything else stays diagnosis-and-suggestion only, for the agent to raise in chat rather
+than act on: stalled/degraded throughput (on either phase) isn't a thread-count problem —
+per the support article, it's usually a network or connectivity issue, so more or fewer
+threads wouldn't address it — and restore-phase findings aren't auto-remediated at all,
+since the destination side isn't a process this app can safely stop and relaunch the way it
+can its own backup subprocess (restore already has its own retry loop for a different
+failure mode — see `--map-data` under Troubleshooting backups — and mixing that with a
+thread-count restart mid-flight was more risk than this app takes on automatically). Each
+suggestion is specific and actionable (lower `--threads`/`--data-rate-limit` for the next
+run, check network stability, etc.) rather than a generic "it's slow" message.
+
+Node-level CPU/memory visibility depends on the cluster's management REST API being
+reachable with sufficiently privileged credentials — reliably true for a self-managed
+source cluster, but **Capella doesn't expose this level of node detail**. Auto-throttling
+only applies to the source cluster's backup anyway, and source clusters in this app's
+supported migration path are self-managed, so this isn't a practical gap for that feature;
+throughput-trend findings (stalled/degraded) work against either side since they're derived
+entirely from `cbbackupmgr`'s own output.
 
 ### Troubleshooting first boot
 
@@ -339,7 +401,13 @@ docs for the full reference.
 Ask the agent panel (bottom-right) about validation failures, migration strategy, or "what
 happened last time we hit an XDCR warning like this" — it recalls similar past events from
 Couchbase-backed agent memory via native vector search (see the Enterprise Edition note
-above).
+above). It also opens on its own during an active backup or restore if it detects a
+bottleneck (stalled/degraded throughput, CPU/memory pressure, thread oversubscription). For
+a backup that's overloading the source cluster, it doesn't just suggest — it automatically
+restarts the backup with fewer threads and tells you here once it has; everything it can't
+safely fix itself (restore-side bottlenecks, stalled/degraded transfers) still comes through
+as a concrete suggestion instead. See "Bottleneck detection" under Architecture for the full
+breakdown of what's automatic and what isn't.
 
 ## Configuration notes
 
@@ -358,7 +426,7 @@ above).
 - **Swapping the LLM**: point `QWEN_BASE_URL` at any Ollama-compatible server; the backend only
   calls `/api/chat` and `/api/embeddings`.
 - **Scaling beyond one API replica**: `MigrationStore` (backend/app/core/store.py) persists to a
-  JSON file for simplicity. Swap it for a Couchbase collection if you need
+  JSON file for simplicity. Swap it for a Couchbase collection or Postgres table if you need
   multiple backend replicas.
 
 ## Development

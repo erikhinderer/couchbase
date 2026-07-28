@@ -5,8 +5,10 @@ import DashboardPage from "@/pages/DashboardPage";
 import NewMigrationPage from "@/pages/NewMigrationPage";
 import MigrationDetailPage from "@/pages/MigrationDetailPage";
 import AgentPanel from "@/components/agent/AgentPanel";
+import { useWizardStore } from "@/store/wizardStore";
 
 export default function App() {
+  const wizardReset = useWizardStore((s) => s.reset);
   return (
     <div style={{ display: "flex", height: "100vh", background: "var(--bg-0)" }}>
       <aside
@@ -24,7 +26,12 @@ export default function App() {
           <CouchbaseWordmark />
         </div>
         <NavItem to="/" icon={<LayoutDashboard size={16} />} label="Migrations" end />
-        <NavItem to="/new" icon={<PlusCircle size={16} />} label="New Migration" />
+        <NavItem
+          to="/new"
+          icon={<PlusCircle size={16} />}
+          label="New Migration"
+          onClick={wizardReset}
+        />
         <div style={{ marginTop: "auto", padding: "8px" }}>
           <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
             Supports Couchbase Server 7.2.0 – 8.0.2
@@ -50,16 +57,19 @@ function NavItem({
   icon,
   label,
   end,
+  onClick,
 }: {
   to: string;
   icon: React.ReactNode;
   label: string;
   end?: boolean;
+  onClick?: () => void;
 }) {
   return (
     <NavLink
       to={to}
       end={end}
+      onClick={onClick}
       style={({ isActive }) => ({
         display: "flex",
         alignItems: "center",

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { listMigrations } from "@/api/client";
 import { useMigrationSocket } from "@/hooks/useMigrationSocket";
+import { useWizardStore } from "@/store/wizardStore";
 import StatCard from "@/components/dashboard/StatCard";
 
 const PHASE_BADGE: Record<string, string> = {
@@ -21,6 +22,7 @@ const PHASE_BADGE: Record<string, string> = {
 export default function DashboardPage() {
   const [migrations, setMigrations] = useState<any[]>([]);
   const { data: liveUpdate } = useMigrationSocket("*");
+  const wizard = useWizardStore();
 
   useEffect(() => {
     listMigrations().then(setMigrations).catch(() => {});
@@ -50,7 +52,14 @@ export default function DashboardPage() {
             Couchbase Server → Couchbase Capella migration jobs
           </p>
         </div>
-        <Link to="/new" className="cb-btn cb-btn-primary">New Migration</Link>
+        {/* The wizard's own store (source/destination/strategy/step) is a global
+            Zustand store that otherwise survives navigation -- without resetting it
+            here, jumping back into "New Migration" after finishing/approving a prior
+            migration would silently resume at whatever step (often Approve) and with
+            whatever cluster values the last migration left behind. */}
+        <Link to="/new" className="cb-btn cb-btn-primary" onClick={() => wizard.reset()}>
+          New Migration
+        </Link>
       </div>
 
       <div style={{ display: "flex", gap: 14, marginBottom: 28 }}>

@@ -83,6 +83,12 @@ class ValidationCheckId(str, Enum):
 class BackupStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
+    # A brief transitional state: the agent has terminated a running backup on
+    # purpose (not a failure) to relaunch it with a lower --threads value after
+    # detecting sustained CPU saturation/thread oversubscription/memory pressure
+    # on the source cluster. See bottleneck_detector.py and
+    # MigrationEngine.backup_source()'s auto-throttle retry loop.
+    THROTTLING = "throttling"
     COMPLETE = "complete"
     FAILED = "failed"
     RESTORED = "restored"
@@ -95,6 +101,22 @@ class NodeServiceType(str, Enum):
     SEARCH = "fts"
     ANALYTICS = "cbas"
     EVENTING = "eventing"
+
+
+class BottleneckKind(str, Enum):
+    """Categories of backup/restore bottleneck the agent watches for while a
+    migration is running, based on Couchbase's own guidance:
+      - "Troubleshooting Slow Couchbase Backup and Restore Processes"
+        (support.couchbase.com/hc/en-us/articles/24941535204763)
+      - "Manage Backup Service Threads" thread-vs-CPU sizing formula
+        (docs.couchbase.com/server/current/rest-api/backup-node-threads.html)
+    See backend/app/core/bottleneck_detector.py for the detection logic itself.
+    """
+    THREAD_OVERSUBSCRIBED = "thread_oversubscribed"  # --threads above cpu_cores * 0.75
+    CPU_SATURATED = "cpu_saturated"                   # a relevant node is near 100% CPU
+    MEMORY_PRESSURE = "memory_pressure"               # a relevant node is low on free memory
+    THROUGHPUT_STALLED = "throughput_stalled"         # ~0 MB/s for a sustained window
+    THROUGHPUT_DEGRADED = "throughput_degraded"       # well below this run's own peak
 
 
 MIN_SUPPORTED_VERSION = (7, 2, 0)

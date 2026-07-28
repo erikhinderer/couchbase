@@ -28,6 +28,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -36,19 +37,27 @@ from pathlib import Path
 from app.config import get_settings
 from app.core.backup_manager import (
     BackupManager,
+    BackupThrottleRequested,
     _PROGRESS_ITEMS_SIZE_RE,
     _PROGRESS_PCT_RE,
     _PROGRESS_RATE_ETA_RE,
     _SIZE_UNIT_TO_MB,
     _parse_go_duration_seconds,
 )
+from app.core.bottleneck_detector import (
+    MAX_AUTO_THROTTLE_ATTEMPTS,
+    MIN_AUTO_THROTTLE_THREADS,
+    BottleneckMonitor,
+    NodeResourceStats,
+)
 from app.core.capella_client import CapellaClient
 from app.core.couchbase_client import CouchbaseClusterClient
 from app.core.store import MigrationStore
 from app.core.validator import MigrationValidator
 from app.core.xdcr import XDCRManager
-from app.models.enums import CONTINUOUS_STRATEGIES, BackupStatus, MigrationPhase, MigrationStrategy
-from app.models.schemas import BackupRecord, MigrationRecord, MigrationStats
+from app.memory.couchbase_memory import AgentMemoryStore
+from app.models.enums import CONTINUOUS_STRATEGIES, BackupStatus, BottleneckKind, MigrationPhase, MigrationStrategy
+from app.models.schemas import BackupRecord, BottleneckFinding, ClusterConnectionConfig, MigrationRecord, MigrationStats
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -113,6 +122,96 @@ class MigrationEngine:
         record.log_tail = record.log_tail[-200:]
         logger.info("migration %s: %s", record.migration_id, line)
 
+    # -- bottleneck detection -------------------------------------------------
+    # See bottleneck_detector.py's module docstring for the full design rationale.
+    # _check_bottlenecks() itself only ever detects and posts a suggestion finding
+    # -- it never touches a running process. backup_source()'s auto-throttle loop
+    # (below) is the one place that acts on a finding's recommended_threads, and
+    # only for the backup phase.
+
+    @staticmethod
+    def _fetch_node_resource_stats(cluster: ClusterConnectionConfig) -> list[NodeResourceStats]:
+        """Best-effort: some clusters (notably Capella) don't expose this level of
+        node detail over the management REST API at all, or the configured
+        credentials may not have the cluster-admin role it requires -- that's an
+        expected, non-fatal gap (source clusters are almost always self-managed and
+        do expose it), not a bug, so callers should treat an empty result the same
+        as "couldn't check this time"."""
+        client = CouchbaseClusterClient(cluster)
+        try:
+            pools = client.get_pools_default()
+        finally:
+            client.close()
+        stats: list[NodeResourceStats] = []
+        for n in pools.get("nodes", []):
+            sys_stats = n.get("systemStats") or {}
+            cpu_cores = n.get("cpuCount") or sys_stats.get("cpu_cores_available") or 0
+            mem_total = sys_stats.get("mem_total") or 0
+            if not mem_total:
+                # Nothing usable on this node -- skip rather than let a 0/0 divide
+                # downstream masquerade as "0% memory free".
+                continue
+            stats.append(NodeResourceStats(
+                hostname=n.get("hostname", "unknown"),
+                cpu_utilization_pct=float(sys_stats.get("cpu_utilization_rate") or 0.0),
+                cpu_cores=int(cpu_cores),
+                mem_total_bytes=int(mem_total),
+                mem_free_bytes=int(sys_stats.get("mem_free") or 0),
+            ))
+        return stats
+
+    async def _check_bottlenecks(
+        self, record: MigrationRecord, monitor: BottleneckMonitor, *, phase: str,
+        cluster: ClusterConnectionConfig, configured_threads: int, mbps: float, elapsed_s: float,
+    ) -> list[BottleneckFinding]:
+        """Runs one round of bottleneck detection, appends any new findings to
+        record.bottleneck_findings, and returns just those new findings so a caller
+        (currently only backup_source()'s auto-throttle loop) can act on
+        finding.recommended_threads without re-deriving it."""
+        monitor.observe(mbps, elapsed_s)
+        raw_findings = monitor.local_findings()
+
+        if monitor.should_poll_stats():
+            try:
+                # Node stats are a synchronous `requests` call (see couchbase_client.py) --
+                # push it to a thread so a slow/unreachable cluster can't stall the
+                # backup/restore progress loop this is called from.
+                node_stats = await asyncio.to_thread(self._fetch_node_resource_stats, cluster)
+                raw_findings += monitor.stats_findings(node_stats, configured_threads, cluster.label)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Bottleneck stats poll skipped for %s: %s", cluster.label, exc)
+
+        if not raw_findings:
+            return []
+
+        new_findings: list[BottleneckFinding] = []
+        for raw in raw_findings:
+            finding = BottleneckFinding(
+                kind=raw.kind, phase=phase, cluster_label=cluster.label,
+                message=raw.message, suggestion=raw.suggestion,
+                recommended_threads=raw.recommended_threads,
+            )
+            new_findings.append(finding)
+            record.bottleneck_findings.append(finding)
+            record.bottleneck_findings = record.bottleneck_findings[-20:]
+            self._log(record, f"Bottleneck detected ({raw.kind.value}, {phase}): {raw.message} Suggestion: {raw.suggestion}")
+            try:
+                await AgentMemoryStore.instance().remember(
+                    "bottleneck_detected",
+                    {
+                        "migration_name": record.plan.name,
+                        "phase": phase,
+                        "cluster": cluster.label,
+                        "kind": raw.kind.value,
+                        "message": raw.message,
+                        "suggestion": raw.suggestion,
+                    },
+                    migration_id=str(record.migration_id),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to write bottleneck-detection memory: %s", exc)
+        return new_findings
+
     # -- pipeline steps -----------------------------------------------------
 
     async def validate(self, record: MigrationRecord) -> MigrationRecord:
@@ -143,17 +242,120 @@ class MigrationEngine:
             record.validation_report.source_topology.buckets if record.validation_report and record.validation_report.source_topology else []
         )
 
-        async def _on_backup_progress(backup_record: BackupRecord) -> None:
-            # Same instance is mutated in place by BackupManager on every parsed
-            # progress line -- re-assigning here just keeps record.backup_record
-            # pointing at it from the very first (still-RUNNING) tick, so the wizard's
-            # websocket subscriber sees live percent/ETA/throughput as the backup runs,
-            # not just the final result.
-            record.backup_record = backup_record
-            await self._emit(record)
+        # Auto-throttle loop: a thread-actionable bottleneck finding on the BACKUP
+        # phase (CPU saturation / thread oversubscription / memory pressure on the
+        # source cluster) doesn't just get posted as a suggestion here -- since this
+        # is a subprocess the app itself launched and fully controls, it stops
+        # cbbackupmgr and relaunches at Couchbase's own recommended thread count
+        # instead, capped at MAX_AUTO_THROTTLE_ATTEMPTS restarts and never below
+        # MIN_AUTO_THROTTLE_THREADS. Each attempt gets a fresh archive/repo (see
+        # BackupManager's repo_suffix) since cbbackupmgr has no supported way to
+        # resume a *backup* that was killed mid-write. If attempts run out while the
+        # cluster is still saturated, the loop just stops throttling and lets the
+        # current attempt run to completion/failure -- the last posted finding
+        # stands as a plain suggestion for the user, same as any other bottleneck
+        # this app can't act on by itself.
+        current_threads = max(1, record.plan.parallelism)
+        throttle_attempts = 0
+        backup_record: BackupRecord | None = None
 
-        manager = BackupManager(record.migration_id, record.plan.source, bucket_names, on_progress=_on_backup_progress)
-        backup_record = await manager.backup()
+        while True:
+            bottleneck_monitor = BottleneckMonitor()
+            throttle_requested = False
+
+            async def _on_backup_progress(backup_rec: BackupRecord) -> None:
+                nonlocal throttle_requested
+                # Same instance is mutated in place by BackupManager on every parsed
+                # progress line -- re-assigning here just keeps record.backup_record
+                # pointing at it from the very first (still-RUNNING) tick, so the
+                # wizard's websocket subscriber sees live percent/ETA/throughput as
+                # the backup runs, not just the final result.
+                record.backup_record = backup_rec
+                new_findings = await self._check_bottlenecks(
+                    record, bottleneck_monitor, phase="backup", cluster=record.plan.source,
+                    configured_threads=current_threads,
+                    mbps=backup_rec.throughput_mb_per_sec, elapsed_s=backup_rec.elapsed_seconds,
+                )
+                if (
+                    not throttle_requested
+                    and throttle_attempts < MAX_AUTO_THROTTLE_ATTEMPTS
+                    and current_threads > MIN_AUTO_THROTTLE_THREADS
+                ):
+                    for finding in new_findings:
+                        if finding.recommended_threads is None:
+                            continue
+                        target = max(
+                            MIN_AUTO_THROTTLE_THREADS,
+                            min(finding.recommended_threads, current_threads - 1),
+                        )
+                        if target < current_threads:
+                            throttle_requested = True
+                            manager.request_abort(target, finding.kind.value)
+                            break
+                await self._emit(record)
+
+            manager = BackupManager(
+                record.migration_id, record.plan.source, bucket_names,
+                on_progress=_on_backup_progress, parallelism=current_threads,
+                repo_suffix=f"-throttle{throttle_attempts}" if throttle_attempts else "",
+            )
+
+            try:
+                backup_record = await manager.backup()
+            except BackupThrottleRequested as abort:
+                throttle_attempts += 1
+                old_threads = current_threads
+                current_threads = max(MIN_AUTO_THROTTLE_THREADS, abort.target_threads)
+                self._log(
+                    record,
+                    f"Auto-throttling backup: reduced --threads from {old_threads} to "
+                    f"{current_threads} on {record.plan.source.label} due to sustained "
+                    f"{abort.reason.replace('_', ' ')} (attempt {throttle_attempts}/"
+                    f"{MAX_AUTO_THROTTLE_ATTEMPTS}); restarting the backup now.",
+                )
+                remediation = BottleneckFinding(
+                    kind=BottleneckKind(abort.reason),
+                    phase="backup",
+                    cluster_label=record.plan.source.label,
+                    message=(
+                        f"Backup threads were oversubscribing {record.plan.source.label}, so "
+                        f"the agent stopped the backup and is restarting it with fewer threads."
+                    ),
+                    suggestion=f"Reduced --threads from {old_threads} to {current_threads} and restarted the backup on a fresh archive.",
+                    recommended_threads=current_threads,
+                    auto_remediated=True,
+                )
+                record.bottleneck_findings.append(remediation)
+                record.bottleneck_findings = record.bottleneck_findings[-20:]
+                try:
+                    await AgentMemoryStore.instance().remember(
+                        "bottleneck_auto_remediated",
+                        {
+                            "migration_name": record.plan.name,
+                            "phase": "backup",
+                            "cluster": record.plan.source.label,
+                            "kind": abort.reason,
+                            "old_threads": old_threads,
+                            "new_threads": current_threads,
+                            "attempt": throttle_attempts,
+                        },
+                        migration_id=str(record.migration_id),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Failed to write auto-remediation memory: %s", exc)
+                await self._emit(record)
+                # Best-effort cleanup of the aborted attempt's partial archive -- it's
+                # never used again (the next attempt gets its own repo_suffix) and
+                # leaving it around just wastes disk.
+                try:
+                    shutil.rmtree(manager.archive_path, ignore_errors=True)
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
+            else:
+                break
+
+        assert backup_record is not None
         record.backup_record = backup_record
 
         if backup_record.status != BackupStatus.COMPLETE:
@@ -162,9 +364,13 @@ class MigrationEngine:
             self._log(record, f"Backup FAILED: {backup_record.error_message}")
         else:
             record.phase = MigrationPhase.AWAITING_APPROVAL
+            throttle_note = (
+                f" (auto-throttled {throttle_attempts}x to {current_threads} threads)"
+                if throttle_attempts else ""
+            )
             self._log(
                 record,
-                f"Backup complete ({(backup_record.size_bytes or 0) / (1024**2):.1f} MiB). "
+                f"Backup complete ({(backup_record.size_bytes or 0) / (1024**2):.1f} MiB){throttle_note}. "
                 "Migration is ready for user approval.",
             )
         await self._emit(record)
@@ -301,6 +507,7 @@ class MigrationEngine:
         start = time.monotonic()
         record.stats = MigrationStats(docs_total=record.validation_report.source_topology.total_docs or 0
                                        if record.validation_report and record.validation_report.source_topology else 0)
+        bottleneck_monitor = BottleneckMonitor()
 
         # cbbackupmgr needs its bundled libcrypto/libssl on LD_LIBRARY_PATH, which is
         # deliberately not set container-wide (see backend/Dockerfile) -- scope it to
@@ -338,6 +545,11 @@ class MigrationEngine:
                     continue
                 captured_lines.append(line)
                 self._parse_progress_line(record, line, start)
+                await self._check_bottlenecks(
+                    record, bottleneck_monitor, phase="restore", cluster=record.plan.destination,
+                    configured_threads=record.plan.parallelism,
+                    mbps=record.stats.throughput_mb_per_sec, elapsed_s=record.stats.elapsed_seconds,
+                )
                 if len(record.log_tail) < 200:
                     self._log(record, line)
                 await self._emit(record)
@@ -555,7 +767,9 @@ class MigrationEngine:
         await self._emit(record)
 
         bucket_names = [b.bucket_name for b in record.plan.buckets if b.include]
-        manager = BackupManager(record.migration_id, record.plan.source, bucket_names)
+        manager = BackupManager(
+            record.migration_id, record.plan.source, bucket_names, parallelism=record.plan.parallelism,
+        )
         restored = await manager.rollback(record.backup_record)
         record.backup_record = restored
 
