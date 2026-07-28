@@ -28,7 +28,7 @@ Couchbase Server **7.2.0 through 8.0.2**.
 > cosine-similarity scan if the vector index is ever momentarily unavailable, purely as a
 > resilience net — it's not the expected steady-state path.
 
-### Migration pipeline
+### Migration Pipeline Modes
 
 Every migration always starts the same way — validate the source/destination, back up
 the source, and require human approval — regardless of how data is transferred:
@@ -82,6 +82,102 @@ docker compose up --build
 First boot pulls the Qwen model (`qwen3:8b` by default) and initializes the Couchbase
 Enterprise Edition memory store — this can take a few minutes; subsequent starts are fast
 (cached in the `ollama_data` / `couchbase_memory_data` volumes).
+
+## Step-by-step wizard guide
+
+This walks through the wizard exactly as it runs, from **New Migration** through the moment
+data actually starts moving. Each step gates the next, and every "test"/"validate" action is
+a live check against your real source and destination clusters, not a syntax check — a
+green badge means the app actually talked to that cluster successfully.
+
+### 1. Source
+
+- **Migration name** — a free-text label used everywhere else in the app (dashboard, the
+  migration detail page's title, and anything the agent recalls from memory about this run).
+- Fill in the source cluster's **Friendly name**, **Connection string**
+  (`couchbase://host1,host2`, or `couchbases://...` if the source itself uses TLS),
+  **Username**, **Password**, and whether to **Use TLS**.
+- If the source is on a cloud VM or Kubernetes (EC2, GKE, CAO, etc.), check **Cluster is on a
+  cloud VM or Kubernetes**. This makes `cbbackupmgr` resolve nodes via their external/alternate
+  address instead of an internal one it can't reach from outside the cluster's network — but
+  the checkbox alone isn't enough; alternate addressing also has to be configured on the
+  cluster itself (see "Troubleshooting backups against cloud VMs / Kubernetes" below).
+- Click **Test & introspect source**. On success you'll see a `Connected · N buckets ·
+  vX.X.X` badge; on failure, the error banner explains why (bad credentials, unreachable
+  host, TLS mismatch, etc.) rather than a generic failure.
+- The source form never shows a "this is Capella" toggle — the source is always treated as a
+  self-managed cluster.
+- Nothing is created on the backend yet at this step; **Next** just advances the wizard.
+
+### 2. Destination & Mode
+
+- Same connection fields as Source, plus a **This endpoint is a Couchbase Capella cluster**
+  checkbox. Checking it forces `couchbases://` and TLS on (Capella requires both) and reveals
+  two optional fields, **Capella project ID** and **Capella cluster ID** — set both (along
+  with `CAPELLA_API_TOKEN`/`CAPELLA_ORG_ID` in `.env`) if you want the agent to
+  auto-provision missing destination buckets via the Capella Management API; leave them
+  blank if the destination buckets already exist.
+- Click **Test destination connection** for the same kind of live check as the source step;
+  success shows a `Reachable` badge.
+- Choose a **Replication mode** — this is a one-time choice made here, not something you
+  switch later without starting a new migration:
+  - **One-time migration** — a single `cbbackupmgr restore` snapshot; the migration finishes
+    once the transfer completes.
+  - **Continuous replication** — XDCR streams changes indefinitely starting right after
+    approval; you stop it later from the migration detail page (cutover or halt).
+  - **Bulk copy + continuous sync** — a one-time restore for existing data, then XDCR takes
+    over for the ongoing delta.
+- Clicking **Create & validate** is what actually creates the migration record on the
+  backend (`POST /api/migrations`) and immediately runs validation — this is the point where
+  a `migration_id` first exists, though nothing has touched your data yet.
+
+### 3. Validate
+
+- Shows the topology diagram (source cluster, destination cluster, and the migration agent
+  in between) plus the full list of validation checks: version compatibility
+  (7.2.0–8.0.2), connectivity, RBAC, schema/index compatibility, XDCR topology, TLS, and
+  network latency.
+- An XDCR remote satellite only appears on this diagram when the replication mode chosen in
+  step 2 is one of the two continuous modes — a source cluster's own pre-existing, unrelated
+  XDCR replications (e.g. left over from an earlier migration attempt against the same
+  cluster) won't show up here for a plain one-time migration.
+- Failed checks (red) block **Continue**; warnings (yellow) don't. Re-running validation
+  isn't exposed as a standalone action in the wizard — go back and forward through the steps,
+  or start a new migration, if you need to re-check after fixing something.
+
+### 4. Backup
+
+- Click **Run backup (cbbackupmgr)** to take a full backup of the source cluster — this
+  always captures every bucket on the source, regardless of which buckets you plan to
+  actually migrate (bucket selection is enforced later, at restore time).
+- The backup runs on the server in the background; the wizard shows a live progress bar
+  (percentage, items transferred, size, throughput, ETA) streamed over a websocket, so
+  there's no need to keep a browser tab's request open or watch container logs to know it's
+  still making progress.
+- A failed backup shows its `cbbackupmgr` error inline (the card under the button expands
+  with the error text) and offers **Retry backup**. **Continue** stays disabled until the
+  backup's status is `complete` — a failed backup can't silently carry you into approval.
+- The migration cannot be approved until this backup succeeds; it's also what rollback
+  restores the source to if anything downstream goes wrong.
+
+### 5. Review & approve
+
+- A summary card recaps the migration name, source, destination, replication mode, and
+  backup status for one last check before anything is transferred.
+- Clicking **Approve & start migration** only approves the migration here — a named human
+  sign-off that records who approved it and when — and takes you to the migration's detail
+  page. It does not start the transfer by itself despite the label; that's the next step.
+
+### 6. Start migration
+
+- On the migration detail page, once the migration is in the `approved` phase, a **Start
+  migration** button appears (labeled **Start replication** for the two continuous modes) —
+  click it to actually begin moving data.
+- From here, the same kind of live dashboard used throughout the wizard takes over:
+  throughput, docs migrated, error rate, and ETA streamed over the websocket, rendered on the
+  same topology diagram. One-time migrations run to `complete` on their own; continuous
+  modes settle into `replicating` and stay there until you stop them (cutover or halt) from
+  this same page.
 
 ### Troubleshooting first boot
 
@@ -168,6 +264,12 @@ Couchbase cluster, so it's unrelated to those clusters' reachability. In order o
    required for a change to take effect. See the `.env` comments for the exact variables.
 3. Once on a version with this troubleshooting section, the error message itself will name the
    exact URL the browser tried to reach -- that's usually enough to tell which of the above it is.
+4. **A single request was held open for a long time and something in between reset it** (seen
+   with the Backup step against a real cluster, where the request used to block for the whole
+   backup duration). If this happens on an action that finishes almost immediately, it's one of
+   the two causes above; if it happens on a long-running action, check whether the underlying
+   operation actually completed anyway (the live progress bar / websocket-driven status is the
+   source of truth, not the HTTP response) before assuming something is broken.
 
 ### Troubleshooting backups against cloud VMs / Kubernetes ("connection refused" partway through)
 
