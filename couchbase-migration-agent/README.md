@@ -6,7 +6,7 @@ Couchbase Server **7.2.0 through 8.0.2**.
 
 The Couchbase Migration Agent performs Migration Bottleneck Detection as a feature of the agent and it polls the source server for resources and reconfigures active backups and XDCR replication on the fly to use the optimal number of CPUs for the backup job and restart it, so that the migration from the source server doesn’t degrade client connections to the source database.
 
-<img width="1468" height="813" alt="image" src="https://github.com/user-attachments/assets/63eec8cd-64f7-4a9c-be75-3b2d53ea4411" />
+<img width="1470" height="818" alt="image" src="https://github.com/user-attachments/assets/0d58363f-6236-4578-9708-73137a68abbf" />
 
 ## Quick start
 
