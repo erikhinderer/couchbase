@@ -8,6 +8,8 @@ Dark-mode React UI styled after AWS Data Migration Service, with Couchbase brand
 topology diagrams, live migration/performance stats, validation checklists, backup/rollback
 controls, and a user-approval gate before any data leaves the source cluster.
 
+<img width="1470" height="884" alt="image" src="https://github.com/user-attachments/assets/f265d3d5-25d6-40d9-9f43-a96588b53d6e" />
+
 ## Architecture
 
 | Component | Tech | Purpose |
