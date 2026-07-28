@@ -126,6 +126,14 @@ If you still see a stale-container conflict after pulling this update, `docker c
 (from *this* project folder) will clean up containers under the pinned project name; add `-v`
 per the section above if you also want a clean data volume.
 
+
+### Troubleshooting Firewall Networking
+
+The following firewall rules need to be in place for the Couchbase Migration Agent to operate
+
+<img width="2956" height="1096" alt="image" src="https://github.com/user-attachments/assets/07196ac8-e13b-4524-898f-b64946573318" />
+
+
 ### Troubleshooting backups
 
 The **Backup** wizard step shows the actual `cbbackupmgr` error inline when a backup fails
