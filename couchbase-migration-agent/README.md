@@ -4,9 +4,11 @@ A Dockerized AI agent for migrating Couchbase Server clusters — single-node, m
 and Cross Data Center Replication (XDCR) topologies — to Couchbase Capella. Supports
 Couchbase Server **7.2.0 through 8.0.2**.
 
-Dark-mode React UI styled after AWS Data Migration Service, with Couchbase branding: cluster
+Dark-mode React UI styled after familiar cloud data migration services, with Couchbase branding: cluster
 topology diagrams, live migration/performance stats, validation checklists, backup/rollback
 controls, and a user-approval gate before any data leaves the source cluster.
+
+<img width="1470" height="884" alt="image" src="https://github.com/user-attachments/assets/f265d3d5-25d6-40d9-9f43-a96588b53d6e" />
 
 ## Architecture
 
