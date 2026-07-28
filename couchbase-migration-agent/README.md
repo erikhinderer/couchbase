@@ -87,6 +87,8 @@ First boot pulls the Qwen model (`qwen3:8b` by default) and initializes the Couc
 Enterprise Edition memory store — this can take a few minutes; subsequent starts are fast
 (cached in the `ollama_data` / `couchbase_memory_data` volumes).
 
+If you plan to access the UI from other than http://localhost:5173 (a LAN IP, a different hostname, a remote box), you need to configure the backend's CORS_ORIGINS and the frontend's VITE_API_BASE_URL/VITE_WS_BASE_URL DNS name or IP address in the .env file. Set all three in .env with the appropriate IP or DNS name, then rebuild -- VITE_API_BASE_URL/VITE_WS_BASE_URL are baked into the frontend's JS at build time by Vite, so docker compose up --build (not a plain up, and not a container restart) is required for a change to take effect. See the .env comments for the exact variables.
+
 ## Step-by-step wizard guide
 
 This walks through the wizard exactly as it runs, from **New Migration** through the moment
