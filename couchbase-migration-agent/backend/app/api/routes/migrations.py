@@ -79,14 +79,44 @@ async def validate_migration(migration_id: UUID) -> ValidationReport:
 
 
 @router.post("/{migration_id}/backup", response_model=MigrationRecord)
-async def backup_migration(migration_id: UUID) -> MigrationRecord:
+async def backup_migration(migration_id: UUID, background_tasks: BackgroundTasks) -> MigrationRecord:
     record = await MigrationStore.instance().get(migration_id)
     if not record:
         raise HTTPException(404, "Migration not found")
-    try:
-        return await _engine().backup_source(record)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    if record.phase != MigrationPhase.VALIDATED:
+        raise HTTPException(400, f"Cannot back up before validation has passed (current phase: {record.phase}).")
+
+    async def _run() -> None:
+        engine = _engine()
+        try:
+            await engine.backup_source(record)
+        except Exception as exc:  # noqa: BLE001
+            # backup_source() already turns a failed cbbackupmgr run into a normal
+            # BACKUP_FAILED phase + populated backup_record.error_message (surfaced
+            # to the wizard via the websocket like any other outcome) -- this only
+            # catches something unexpected happening *around* that, e.g. archive
+            # directory creation, so a bug there doesn't leave the wizard's progress
+            # bar stuck at "running" forever with no explanation.
+            logger.exception("Unexpected error backing up migration %s", migration_id)
+            record.phase = MigrationPhase.BACKUP_FAILED
+            record.error_message = str(exc)
+            await engine._emit(record)  # noqa: SLF001
+
+    # Backing up a real cluster routinely takes over a minute (see BackupManager).
+    # This used to run inline and block the HTTP response for the whole duration --
+    # on at least one real run the browser reported "NetworkError when attempting to
+    # fetch resource" partway through even though the backup itself completed
+    # successfully server-side moments later (confirmed by the same websocket
+    # broadcast this endpoint already pushes progress over). A single request held
+    # open that long is exposed to any idle-connection reset along the way (proxies,
+    # Docker's port forwarding, browser tab throttling); scheduling it as a
+    # background task instead -- the same fix already applied to start_migration()
+    # for the same underlying reason -- means this response returns immediately and
+    # the wizard's progress bar / final result come entirely from the websocket
+    # (see NewMigrationPage.tsx's displayedBackup), which isn't tied to this
+    # request's lifetime at all.
+    background_tasks.add_task(_run)
+    return record
 
 
 @router.post("/{migration_id}/approve", response_model=MigrationRecord)

@@ -34,14 +34,21 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import get_settings
-from app.core.backup_manager import BackupManager
+from app.core.backup_manager import (
+    BackupManager,
+    _PROGRESS_ITEMS_SIZE_RE,
+    _PROGRESS_PCT_RE,
+    _PROGRESS_RATE_ETA_RE,
+    _SIZE_UNIT_TO_MB,
+    _parse_go_duration_seconds,
+)
 from app.core.capella_client import CapellaClient
 from app.core.couchbase_client import CouchbaseClusterClient
 from app.core.store import MigrationStore
 from app.core.validator import MigrationValidator
 from app.core.xdcr import XDCRManager
 from app.models.enums import CONTINUOUS_STRATEGIES, BackupStatus, MigrationPhase, MigrationStrategy
-from app.models.schemas import MigrationRecord, MigrationStats
+from app.models.schemas import BackupRecord, MigrationRecord, MigrationStats
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -51,12 +58,12 @@ ProgressCallback = Callable[[MigrationRecord], Awaitable[None]]
 # How often to poll XDCR task stats while a continuous replication is REPLICATING.
 REPLICATION_POLL_INTERVAL_S = 5
 
-# cbbackupmgr transfer progress lines look roughly like:
-#   "Transferred 1234/5678 items (56.78%), 12.3MB/s"
-_PROGRESS_RE = re.compile(
-    r"Transferred\s+(?P<done>\d+)/(?P<total>\d+)\s+items.*?(?P<pct>[\d.]+)%\)?,?\s*(?P<rate>[\d.]+)\s*(?P<unit>[KMG]B)/s",
-    re.IGNORECASE,
-)
+# cbbackupmgr's real progress output is NOT a single "done/total (pct%) rate" line --
+# it's an in-place-redrawing terminal display split across separate lines (a bare
+# percentage-bar line, and a status line with rate/eta/items/size that doesn't always
+# include all of those fields). See backup_manager.py's _PROGRESS_*_RE patterns and
+# _apply_progress_line() for the full explanation and the shared regexes/unit tables
+# reused here so restore and backup progress parsing stay consistent.
 
 # cbbackupmgr refuses to restore a scope/collection whose name already exists on the
 # destination under a *different* internal id (or vice versa) -- it won't guess whether
@@ -135,7 +142,17 @@ class MigrationEngine:
         bucket_names = [b.bucket_name for b in record.plan.buckets if b.include] or (
             record.validation_report.source_topology.buckets if record.validation_report and record.validation_report.source_topology else []
         )
-        manager = BackupManager(record.migration_id, record.plan.source, bucket_names)
+
+        async def _on_backup_progress(backup_record: BackupRecord) -> None:
+            # Same instance is mutated in place by BackupManager on every parsed
+            # progress line -- re-assigning here just keeps record.backup_record
+            # pointing at it from the very first (still-RUNNING) tick, so the wizard's
+            # websocket subscriber sees live percent/ETA/throughput as the backup runs,
+            # not just the final result.
+            record.backup_record = backup_record
+            await self._emit(record)
+
+        manager = BackupManager(record.migration_id, record.plan.source, bucket_names, on_progress=_on_backup_progress)
         backup_record = await manager.backup()
         record.backup_record = backup_record
 
@@ -359,26 +376,43 @@ class MigrationEngine:
         record.stats.elapsed_seconds = time.monotonic() - start
 
     def _parse_progress_line(self, record: MigrationRecord, line: str, start: float) -> None:
-        match = _PROGRESS_RE.search(line)
-        elapsed = time.monotonic() - start
-        record.stats.elapsed_seconds = elapsed
-        if match:
-            done, total = int(match["done"]), int(match["total"])
-            rate = float(match["rate"])
-            unit_mul = {"KB": 1 / 1024, "MB": 1, "GB": 1024}[match["unit"].upper()]
-            record.stats.docs_migrated = done
-            record.stats.docs_total = total or record.stats.docs_total
-            record.stats.throughput_mb_per_sec = rate * unit_mul
-            record.stats.throughput_docs_per_sec = done / elapsed if elapsed > 0 else 0.0
-            remaining = max(total - done, 0)
-            record.stats.eta_seconds = (
-                remaining / record.stats.throughput_docs_per_sec if record.stats.throughput_docs_per_sec > 0 else None
+        # NOTE: cbbackupmgr's real output is split across separate lines (a bare
+        # percentage-bar line, plus a status line whose rate/eta/items/size clauses
+        # aren't all always present) -- see backup_manager.py's _PROGRESS_*_RE
+        # patterns, which are reused here so restore and backup parse the exact same
+        # way. A previous version of this method matched against a single-line
+        # "Transferred X/Y items (Z%), rate" format that cbbackupmgr doesn't actually
+        # emit, so throughput/ETA silently stayed at 0/blank for every restore.
+        changed = False
+        pct_match = _PROGRESS_PCT_RE.match(line)
+        if pct_match and record.stats.docs_total:
+            # cbbackupmgr's own percentage accounts for bucket-config/GSI/FTS/manifest
+            # phases too, not just KV items -- approximate docs_migrated from it
+            # against the known total so the UI's "X / Y docs" readout moves smoothly
+            # even between item-count ticks.
+            record.stats.docs_migrated = min(
+                record.stats.docs_total, round(record.stats.docs_total * float(pct_match["pct"]) / 100.0)
             )
-        elif record.stats.docs_total:
-            # Fallback: no machine-parsable line this tick; keep elapsed time fresh so the
-            # UI's elapsed/ETA readout doesn't stall even if cbbackupmgr's output format
-            # differs by version.
-            pass
+            changed = True
+        items_match = _PROGRESS_ITEMS_SIZE_RE.search(line)
+        if items_match:
+            record.stats.docs_migrated = int(items_match["items"].replace(",", ""))
+            size_mb = float(items_match["size"]) * _SIZE_UNIT_TO_MB.get(items_match["unit"].upper(), 1.0)
+            record.stats.bytes_migrated = round(size_mb * 1024 * 1024)
+            changed = True
+        rate_match = _PROGRESS_RATE_ETA_RE.search(line)
+        if rate_match:
+            record.stats.throughput_mb_per_sec = float(rate_match["rate"]) * _SIZE_UNIT_TO_MB.get(
+                rate_match["unit"].upper(), 1.0
+            )
+            record.stats.eta_seconds = _parse_go_duration_seconds(rate_match["eta"])
+            changed = True
+        if changed:
+            elapsed = time.monotonic() - start
+            record.stats.elapsed_seconds = elapsed
+            record.stats.throughput_docs_per_sec = (
+                record.stats.docs_migrated / elapsed if elapsed > 0 else 0.0
+            )
 
     async def _start_continuous_replication(self, record: MigrationRecord) -> None:
         self._log(record, "Configuring continuous XDCR replication to destination...")
@@ -472,20 +506,44 @@ class MigrationEngine:
         return record
 
     async def _verify(self, record: MigrationRecord) -> None:
-        try:
-            dest_client = CouchbaseClusterClient(record.plan.destination)
-            topo = dest_client.snapshot_topology()
-            dest_client.close()
-            src_total = record.stats.docs_total
-            dest_total = topo.total_docs or 0
-            drift = abs(src_total - dest_total)
-            self._log(
-                record,
-                f"Verification: source={src_total} docs, destination={dest_total} docs "
-                f"(drift={drift}).",
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._log(record, f"Verification could not complete automatically: {exc}")
+        # Couchbase's cluster-manager bucket stats (basicStats.itemCount, which
+        # snapshot_topology() reads) refresh on an internal aggregation interval and
+        # can lag several seconds behind a bulk cbbackupmgr restore that just
+        # finished writing tens of thousands of docs. Checking exactly once,
+        # immediately after restore, previously logged "destination=0 docs
+        # (drift=63343)" on migrations that had in fact fully transferred --
+        # confirmed moments later directly in the Capella UI. Poll briefly instead
+        # of trusting the very first read; stop as soon as the destination catches
+        # up to the source, or after a bounded number of attempts either way.
+        src_total = record.stats.docs_total
+        dest_total = 0
+        last_exc: Exception | None = None
+        attempts = 8
+        for attempt in range(1, attempts + 1):
+            try:
+                dest_client = CouchbaseClusterClient(record.plan.destination)
+                topo = dest_client.snapshot_topology()
+                dest_client.close()
+                dest_total = topo.total_docs or 0
+                last_exc = None
+                if dest_total >= src_total or attempt == attempts:
+                    break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if attempt == attempts:
+                    break
+            await asyncio.sleep(2)
+
+        if last_exc is not None and dest_total == 0:
+            self._log(record, f"Verification could not complete automatically: {last_exc}")
+            return
+
+        drift = abs(src_total - dest_total)
+        self._log(
+            record,
+            f"Verification: source={src_total} docs, destination={dest_total} docs "
+            f"(drift={drift}).",
+        )
 
     # -- rollback -------------------------------------------------------------
 

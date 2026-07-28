@@ -4,11 +4,9 @@ A Dockerized AI agent for migrating Couchbase Server clusters — single-node, m
 and Cross Data Center Replication (XDCR) topologies — to Couchbase Capella. Supports
 Couchbase Server **7.2.0 through 8.0.2**.
 
-Dark-mode React UI styled after familiar cloud data migration services, with Couchbase branding: cluster
+Dark-mode React UI styled after AWS Data Migration Service, with Couchbase branding: cluster
 topology diagrams, live migration/performance stats, validation checklists, backup/rollback
 controls, and a user-approval gate before any data leaves the source cluster.
-
-<img width="1470" height="884" alt="image" src="https://github.com/user-attachments/assets/f265d3d5-25d6-40d9-9f43-a96588b53d6e" />
 
 ## Architecture
 
@@ -125,14 +123,6 @@ during development:
 If you still see a stale-container conflict after pulling this update, `docker compose down`
 (from *this* project folder) will clean up containers under the pinned project name; add `-v`
 per the section above if you also want a clean data volume.
-
-
-### Troubleshooting Firewall Networking
-
-The following firewall rules need to be in place for the Couchbase Migration Agent to operate with the source and destination servers.
-
-<img width="2956" height="1096" alt="image" src="https://github.com/user-attachments/assets/07196ac8-e13b-4524-898f-b64946573318" />
-
 
 ### Troubleshooting backups
 

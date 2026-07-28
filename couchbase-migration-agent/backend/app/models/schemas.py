@@ -143,6 +143,18 @@ class BackupRecord(BaseModel):
     completed_at: Optional[datetime] = None
     size_bytes: Optional[int] = None
     error_message: Optional[str] = None
+    # Live progress, parsed from cbbackupmgr's own progress-bar output while the
+    # backup subprocess is running (see BackupManager._run_streaming()). progress_pct
+    # comes directly from cbbackupmgr's own percentage (it accounts for bucket
+    # config/GSI/FTS/KV phases, not just raw item count, so it's more accurate than
+    # anything we'd derive ourselves from docs_done alone). All fields stay at their
+    # defaults for a backup that hasn't started streaming yet.
+    progress_pct: float = 0.0
+    docs_done: int = 0
+    size_mb_done: float = 0.0
+    throughput_mb_per_sec: float = 0.0
+    eta_seconds: Optional[float] = None
+    elapsed_seconds: float = 0.0
 
 
 class RollbackRequest(BaseModel):

@@ -16,7 +16,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shlex
+import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID
@@ -28,6 +31,46 @@ from app.models.schemas import BackupRecord, ClusterConnectionConfig
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# cbbackupmgr's default (non-`--no-progress-bar`) output is an in-place-redrawing
+# terminal display, not a single machine-friendly "done/total" line -- each redraw
+# emits (at least) two separate lines we can read cleanly once split on "\n":
+#   [================================== ] 48.70%
+#   Transferring key valu... at 3.78MiB/s (about 2s remaining) 11338 items / 7.57MiB
+# (the description text itself is truncated mid-word by cbbackupmgr to fit a
+# terminal width, so it's not reliable to match on -- only the trailing numbers are).
+# Some status lines omit the "at <rate> (about <eta> remaining)" clause entirely
+# (e.g. "Marking transfer as complete 63288 items / 41.49MiB"), so rate/eta and
+# items/size are parsed independently rather than as one combined pattern.
+_PROGRESS_PCT_RE = re.compile(r"^\[[=\s]*\]\s*(?P<pct>[\d.]+)%\s*$")
+_PROGRESS_ITEMS_SIZE_RE = re.compile(
+    r"(?P<items>[\d,]+)\s+items\s*/\s*(?P<size>[\d.]+)\s*(?P<unit>[KMGT]i?B)\s*$", re.IGNORECASE,
+)
+_PROGRESS_RATE_ETA_RE = re.compile(
+    r"at\s+(?P<rate>[\d.]+)\s*(?P<unit>[KMGT]i?B)/s\s*\(about\s+(?P<eta>[^)]+?)\s+remaining\)", re.IGNORECASE,
+)
+# cbbackupmgr reports sizes/rates using binary (Ki/Mi/Gi) units in practice, but
+# tolerate the SI spellings too -- both mean the same "1024-based MB" here.
+_SIZE_UNIT_TO_MB = {"B": 1 / (1024 * 1024), "KB": 1 / 1024, "KIB": 1 / 1024,
+                     "MB": 1.0, "MIB": 1.0, "GB": 1024.0, "GIB": 1024.0,
+                     "TB": 1024.0 * 1024, "TIB": 1024.0 * 1024}
+# cbbackupmgr renders remaining-time as a Go time.Duration string, e.g. "2s",
+# "2m9s", "1h2m3s", "0s".
+_GO_DURATION_RE = re.compile(
+    r"^(?:(?P<h>\d+)h)?(?:(?P<m>\d+)m)?(?:(?P<s>\d+(?:\.\d+)?)s)?$",
+)
+
+BackupProgressCallback = Callable[[BackupRecord], Awaitable[None]]
+
+
+def _parse_go_duration_seconds(text: str) -> float | None:
+    m = _GO_DURATION_RE.match(text.strip())
+    if not m or not any(m.groups()):
+        return None
+    hours = int(m.group("h") or 0)
+    minutes = int(m.group("m") or 0)
+    seconds = float(m.group("s") or 0)
+    return hours * 3600 + minutes * 60 + seconds
+
 
 class BackupError(RuntimeError):
     pass
@@ -36,13 +79,20 @@ class BackupError(RuntimeError):
 class BackupManager:
     """Orchestrates cbbackupmgr config/backup/restore lifecycle for one migration."""
 
-    def __init__(self, migration_id: UUID, source: ClusterConnectionConfig, buckets: list[str]):
+    def __init__(
+        self, migration_id: UUID, source: ClusterConnectionConfig, buckets: list[str],
+        on_progress: BackupProgressCallback | None = None,
+    ):
         self.migration_id = migration_id
         self.source = source
         self.buckets = buckets
         self.repo_name = f"migration-{migration_id}"
         self.archive_path = str(Path(settings.backup_storage_dir) / str(migration_id))
         self._cbbackupmgr = str(Path(settings.couchbase_bin_dir) / "cbbackupmgr")
+        # Called (if set) with the live BackupRecord every time backup() parses a new
+        # progress tick from cbbackupmgr's output, so the caller (MigrationEngine) can
+        # push it out over the websocket for the wizard's live progress bar.
+        self._on_progress = on_progress
 
     def _conn_host(self) -> str:
         # IMPORTANT: do NOT strip the couchbase://couchbases:// scheme here. Per
@@ -101,6 +151,65 @@ class BackupManager:
         stdout, stderr = await proc.communicate()
         return proc.returncode or 0, stdout.decode(errors="replace"), stderr.decode(errors="replace")
 
+    async def _run_streaming(self, record: BackupRecord, *args: str) -> tuple[int, str]:
+        """Like _run(), but reads cbbackupmgr's stdout line by line (merging stderr
+        in) instead of buffering the whole run, parsing progress out of each line and
+        pushing it to self._on_progress as it goes -- see the _PROGRESS_*_RE patterns
+        above. Returns (exit_code, full_captured_output) once the process exits;
+        full_captured_output is still needed on failure since error text (and, for
+        restore, the --map-data conflict details) shows up as regular lines here too."""
+        cmd = [self._cbbackupmgr, *args]
+        logger.info("Running: %s", " ".join(shlex.quote(a) for a in cmd if "password" not in a.lower()))
+        env = {
+            **os.environ,
+            "LD_LIBRARY_PATH": os.pathsep.join(
+                filter(None, [settings.couchbase_lib_dir, os.environ.get("LD_LIBRARY_PATH")])
+            ),
+        }
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=env,
+        )
+        assert proc.stdout is not None
+        start = time.monotonic()
+        captured: list[str] = []
+        async for raw_line in proc.stdout:
+            line = raw_line.decode(errors="replace").strip()
+            if not line:
+                continue
+            captured.append(line)
+            if self._on_progress and self._apply_progress_line(record, line, start):
+                await self._on_progress(record)
+        rc = await proc.wait()
+        return rc, "\n".join(captured)
+
+    @staticmethod
+    def _apply_progress_line(record: BackupRecord, line: str, start: float) -> bool:
+        """Mutates record's progress fields from a single line of cbbackupmgr output,
+        if that line carries progress info. Returns True if anything changed (so the
+        caller knows whether it's worth emitting a websocket update)."""
+        changed = False
+        pct_match = _PROGRESS_PCT_RE.match(line)
+        if pct_match:
+            record.progress_pct = float(pct_match["pct"])
+            changed = True
+        items_match = _PROGRESS_ITEMS_SIZE_RE.search(line)
+        if items_match:
+            record.docs_done = int(items_match["items"].replace(",", ""))
+            record.size_mb_done = float(items_match["size"]) * _SIZE_UNIT_TO_MB.get(
+                items_match["unit"].upper(), 1.0
+            )
+            changed = True
+        rate_match = _PROGRESS_RATE_ETA_RE.search(line)
+        if rate_match:
+            record.throughput_mb_per_sec = float(rate_match["rate"]) * _SIZE_UNIT_TO_MB.get(
+                rate_match["unit"].upper(), 1.0
+            )
+            record.eta_seconds = _parse_go_duration_seconds(rate_match["eta"])
+            changed = True
+        if changed:
+            record.elapsed_seconds = time.monotonic() - start
+        return changed
+
     async def create_archive(self) -> None:
         os.makedirs(self.archive_path, exist_ok=True)
         rc, out, err = await self._run(
@@ -118,6 +227,9 @@ class BackupManager:
             status=BackupStatus.RUNNING,
             started_at=datetime.utcnow(),
         )
+        if self._on_progress:
+            await self._on_progress(record)
+
         await self.create_archive()
 
         # `cbbackupmgr backup` has no per-bucket filter flag -- `--include-data`/
@@ -134,17 +246,22 @@ class BackupManager:
             *self._tls_args(),
         ]
 
-        rc, out, err = await self._run(*args)
+        rc, output = await self._run_streaming(record, *args)
         record.completed_at = datetime.utcnow()
         if rc != 0:
             record.status = BackupStatus.FAILED
-            record.error_message = err or out
+            record.error_message = output
             logger.error("Backup failed for migration %s: %s", self.migration_id, record.error_message)
+            if self._on_progress:
+                await self._on_progress(record)
             return record
 
         record.status = BackupStatus.COMPLETE
+        record.progress_pct = 100.0
         record.size_bytes = self._dir_size(self.archive_path)
         logger.info("Backup complete for migration %s (%s bytes)", self.migration_id, record.size_bytes)
+        if self._on_progress:
+            await self._on_progress(record)
         return record
 
     async def rollback(self, record: BackupRecord) -> BackupRecord:
