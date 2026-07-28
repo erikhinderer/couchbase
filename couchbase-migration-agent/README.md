@@ -27,6 +27,27 @@ First boot pulls the Qwen model (`qwen3:8b` by default) and initializes the Couc
 Enterprise Edition memory store — this can take a few minutes; subsequent starts are fast
 (cached in the `ollama_data` / `couchbase_memory_data` volumes).
 
+### Corporate network / TLS inspection (Couchbase laptops running Netskope)
+
+If `docker compose up --build` fails during `pip install` or `npm install` with something
+like `SSLError(... 'self-signed certificate in certificate chain' ...)`, or `qwen-service`
+fails to start with `certificate signed by unknown authority`, it's Netskope (or similar
+TLS-inspection software) swapping in its own certificate for HTTPS traffic — neither the
+build containers nor the running Ollama container trust it by default. On a Couchbase-managed
+Mac, fix it once with:
+
+```bash
+./scripts/setup-corporate-ca.sh
+```
+
+This finds the Netskope root CA that Couchbase IT already deployed to your keychain, copies
+it to `certs/corporate-ca.crt`, and every Dockerfile picks it up automatically on the next
+build. Not on Netskope? The build already works without it — `certs/corporate-ca.crt` ships
+empty and every install step just skips it.
+
+On Linux/Windows, or if the script can't find anything, export your org's inspection root CA
+yourself (PEM format) and save it to `certs/corporate-ca.crt`.
+
 ## Step-by-step wizard guide
 
 This walks through the wizard exactly as it runs, from **New Migration** through the moment
