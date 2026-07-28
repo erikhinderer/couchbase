@@ -356,7 +356,7 @@ above).
 - **Swapping the LLM**: point `QWEN_BASE_URL` at any Ollama-compatible server; the backend only
   calls `/api/chat` and `/api/embeddings`.
 - **Scaling beyond one API replica**: `MigrationStore` (backend/app/core/store.py) persists to a
-  JSON file for simplicity. Swap it for a Couchbase collection or Postgres table if you need
+  JSON file for simplicity. Swap it for a Couchbase collection if you need
   multiple backend replicas.
 
 ## Development
