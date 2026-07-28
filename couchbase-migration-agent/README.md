@@ -28,7 +28,7 @@ Couchbase Server **7.2.0 through 8.0.2**.
 > cosine-similarity scan if the vector index is ever momentarily unavailable, purely as a
 > resilience net — it's not the expected steady-state path.
 
-### Migration pipeline
+### Migration Pipeline Modes
 
 Every migration always starts the same way — validate the source/destination, back up
 the source, and require human approval — regardless of how data is transferred:
