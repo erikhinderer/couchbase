@@ -129,7 +129,7 @@ per the section above if you also want a clean data volume.
 
 ### Troubleshooting Firewall Networking
 
-The following firewall rules need to be in place for the Couchbase Migration Agent to operate
+The following firewall rules need to be in place for the Couchbase Migration Agent to operate with the source and destination servers.
 
 <img width="2956" height="1096" alt="image" src="https://github.com/user-attachments/assets/07196ac8-e13b-4524-898f-b64946573318" />
 
