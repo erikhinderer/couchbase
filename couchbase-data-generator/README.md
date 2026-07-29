@@ -6,6 +6,8 @@ writes them into a Couchbase Server (or Capella) bucket using the
 a configuration wizard and a live dashboard with an animated data-flow
 diagram, styled after the Couchbase Migration Agent UI.
 
+<img width="1728" height="959" alt="image" src="https://github.com/user-attachments/assets/62ded465-cb80-4429-914d-81180e25dcc8" />
+
 ## What it does
 
 - Wizard collects: connection string, username, password, TLS toggle,
