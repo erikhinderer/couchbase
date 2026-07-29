@@ -219,6 +219,7 @@ class CouchbaseClusterClient:
         scopes_by_bucket: dict[str, list[str]] = {}
         collections_by_bucket: dict[str, list[str]] = {}
         gsi_indexes: list[str] = []
+        per_bucket_stats: dict[str, dict] = {}
         total_docs = 0
         total_size = 0
 
@@ -233,8 +234,11 @@ class CouchbaseClusterClient:
                 collections_by_bucket[name] = []
             gsi_indexes.extend(self.get_gsi_indexes(name))
             stats = b.get("basicStats", {})
-            total_docs += stats.get("itemCount", 0) or 0
-            total_size += stats.get("dataUsed", 0) or 0
+            item_count = stats.get("itemCount", 0) or 0
+            data_size = stats.get("dataUsed", 0) or 0
+            per_bucket_stats[name] = {"item_count": item_count, "data_size_bytes": data_size}
+            total_docs += item_count
+            total_size += data_size
 
         xdcr_remotes = self.get_xdcr_remotes()
         topology_type = ClusterTopologyType.SINGLE
@@ -256,4 +260,5 @@ class CouchbaseClusterClient:
             xdcr_remotes=xdcr_remotes,
             fts_indexes=self.get_fts_indexes(),
             gsi_indexes=gsi_indexes,
+            per_bucket_stats=per_bucket_stats,
         )

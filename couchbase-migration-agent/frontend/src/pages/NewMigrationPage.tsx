@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Sparkles } from "lucide-react";
 import { useWizardStore } from "@/store/wizardStore";
 import StepIndicator from "@/components/wizard/StepIndicator";
 import ClusterConfigForm from "@/components/wizard/ClusterConfigForm";
@@ -13,6 +14,8 @@ import {
   validateMigration,
   backupMigration,
   approveMigration,
+  recommendReplicationMode,
+  backupDownloadUrl,
 } from "@/api/client";
 
 const STRATEGY_LABELS: Record<string, string> = {
@@ -54,6 +57,15 @@ export default function NewMigrationPage() {
   const [validation, setValidation] = useState<any>(null);
   const [backupResult, setBackupResult] = useState<any>(null);
   const isContinuousStrategy = wizard.strategy === "xdcr_live" || wizard.strategy === "hybrid";
+
+  // Replication-mode recommendation (Destination & Mode step): asks the user's
+  // cutover plan, then calls the deterministic recommendation engine with the
+  // already-introspected source topology. Local state, not wizard store -- this is
+  // a one-shot piece of guidance for this visit to the step, not a wizard field
+  // that needs to survive navigation the way source/destination/strategy do.
+  const [cutoverPlan, setCutoverPlan] = useState<"cutover" | "phased" | null>(null);
+  const [recommendation, setRecommendation] = useState<any>(null);
+  const [recommendationLoading, setRecommendationLoading] = useState(false);
 
   // Live progress during the backup step: backupMigration() below blocks on the HTTP
   // response for the whole backup duration, so the only way to show a moving
@@ -101,10 +113,31 @@ export default function NewMigrationPage() {
   }
 
   async function handleTestSource() {
-    await guarded(async () => setSourceTopo(await testConnection(wizard.source)));
+    await guarded(async () => {
+      const topo = await testConnection(wizard.source);
+      setSourceTopo(topo);
+      // Default to every bucket selected -- this is a fresh introspection, so any
+      // previous selection/mapping (e.g. from a different source cluster earlier in
+      // this same wizard session) no longer applies.
+      wizard.setSelectedBuckets(topo.buckets || []);
+    });
   }
   async function handleTestDestination() {
     await guarded(async () => setDestTopo(await testConnection(wizard.destination)));
+  }
+
+  async function handleGetRecommendation(plan: "cutover" | "phased") {
+    setCutoverPlan(plan);
+    setRecommendationLoading(true);
+    setRecommendation(null);
+    try {
+      const rec = await recommendReplicationMode(plan, sourceTopo, 4);
+      setRecommendation(rec);
+    } catch (e: any) {
+      setError(e.message || String(e));
+    } finally {
+      setRecommendationLoading(false);
+    }
   }
 
   async function handleCreateAndValidate() {
@@ -122,7 +155,11 @@ export default function NewMigrationPage() {
         source: wizard.source,
         destination: wizard.destination,
         strategy: wizard.strategy,
-        buckets: (sourceTopo?.buckets || []).map((b: string) => ({ bucket_name: b, include: true })),
+        buckets: (sourceTopo?.buckets || []).map((b: string) => ({
+          bucket_name: b,
+          include: wizard.selectedBuckets.includes(b),
+          target_bucket_name: wizard.bucketTargetNames[b] || undefined,
+        })),
       };
       const record: any = await createMigration(plan);
       wizard.setMigrationId(record.migration_id);
@@ -190,7 +227,16 @@ export default function NewMigrationPage() {
             onChange={(e) => wizard.setMigrationName(e.target.value)}
             style={{ maxWidth: 480, marginBottom: 18 }}
           />
-          <ClusterConfigForm value={wizard.source} onChange={wizard.updateSource} disableCapellaToggle />
+          <ClusterConfigForm
+            value={wizard.source}
+            onChange={wizard.updateSource}
+            disableCapellaToggle
+            belowPassword={
+              <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, maxWidth: 480 }}>
+                *Couchbase Backup Full Admin permissions required
+              </div>
+            }
+          />
           <div style={{ marginTop: 16 }}>
             <button className="cb-btn" onClick={handleTestSource} disabled={busy}>
               Test & introspect source
@@ -205,7 +251,13 @@ export default function NewMigrationPage() {
       )}
 
       {wizard.step === 1 && (
-        <StepShell title="Destination (Capella) cluster" onBack={() => wizard.setStep(0)} onNext={handleCreateAndValidate} nextDisabled={!destTopo || busy} nextLabel="Create & validate">
+        <StepShell
+          title="Destination (Capella) cluster"
+          onBack={() => wizard.setStep(0)}
+          onNext={handleCreateAndValidate}
+          nextDisabled={!destTopo || busy || wizard.selectedBuckets.length === 0}
+          nextLabel="Create & validate"
+        >
           <ClusterConfigForm value={wizard.destination} onChange={wizard.updateDestination} />
           <div style={{ marginTop: 16, marginBottom: 28 }}>
             <button className="cb-btn" onClick={handleTestDestination} disabled={busy}>
@@ -218,12 +270,132 @@ export default function NewMigrationPage() {
             )}
           </div>
 
+          {sourceTopo && (
+            <div className="cb-card" style={{ padding: 14, marginBottom: 24, maxWidth: 640 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+                <Sparkles size={14} color="var(--cb-teal)" /> Ask the agent: which replication mode fits?
+              </div>
+              {!cutoverPlan && (
+                <>
+                  <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 10 }}>
+                    Do you plan to cut every application over to the destination at once, or
+                    migrate them gradually?
+                  </p>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="cb-btn" onClick={() => handleGetRecommendation("cutover")}>
+                      Cut over all at once
+                    </button>
+                    <button className="cb-btn" onClick={() => handleGetRecommendation("phased")}>
+                      Phased migration (apps switch over gradually)
+                    </button>
+                  </div>
+                </>
+              )}
+              {recommendationLoading && (
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Thinking…</span>
+              )}
+              {recommendation && (
+                <div>
+                  <div style={{ fontSize: 12, marginBottom: 8 }}>
+                    <span className="cb-badge cb-badge-progress">Recommended</span>{" "}
+                    <b>{recommendation.headline}</b>
+                  </div>
+                  <p style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 8 }}>
+                    {recommendation.rationale}
+                  </p>
+                  {recommendation.estimated_duration_seconds != null && (
+                    <p style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 8 }}>
+                      Rough one-time transfer estimate: {formatEta(recommendation.estimated_duration_seconds)}{" "}
+                      (planning figure only — actual throughput depends on network, disk, and
+                      cluster load).
+                    </p>
+                  )}
+                  {recommendation.considerations?.length > 0 && (
+                    <ul style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 10, paddingLeft: 18 }}>
+                      {recommendation.considerations.map((c: string, i: number) => (
+                        <li key={i} style={{ marginBottom: 4 }}>{c}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      className="cb-btn cb-btn-primary"
+                      onClick={() => wizard.setStrategy(recommendation.recommended_strategy)}
+                    >
+                      Use this mode
+                    </button>
+                    <button
+                      className="cb-btn"
+                      onClick={() => {
+                        setCutoverPlan(null);
+                        setRecommendation(null);
+                      }}
+                    >
+                      Ask again
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <h3 style={{ fontSize: 13, marginBottom: 4 }}>Replication mode</h3>
           <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 14, maxWidth: 640 }}>
             How should data move from source to destination? You can stop or cut over a
             continuous replication at any time from the migration detail page.
           </p>
           <ReplicationModeSelector value={wizard.strategy} onChange={wizard.setStrategy} />
+
+          {sourceTopo && (
+            <div style={{ marginTop: 24 }}>
+              <h3 style={{ fontSize: 13, marginBottom: 4 }}>Bucket mapping</h3>
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12, maxWidth: 640 }}>
+                Choose which source buckets to migrate, and optionally redirect any of them to a
+                differently-named bucket on the destination (e.g. to consolidate buckets, or
+                avoid a name already in use on Capella).
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 640 }}>
+                {sourceTopo.buckets.map((bucket: string) => {
+                  const selected = wizard.selectedBuckets.includes(bucket);
+                  const stats = sourceTopo.per_bucket_stats?.[bucket];
+                  return (
+                    <div
+                      key={bucket}
+                      className="cb-card"
+                      style={{
+                        padding: "10px 12px", display: "flex", alignItems: "center", gap: 12,
+                        opacity: selected ? 1 : 0.55,
+                      }}
+                    >
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, minWidth: 180 }}>
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => wizard.toggleSelectedBucket(bucket)}
+                        />
+                        {bucket}
+                      </label>
+                      {stats?.data_size_bytes ? (
+                        <span style={{ fontSize: 11, color: "var(--text-muted)", minWidth: 70 }}>
+                          {(stats.data_size_bytes / (1024 ** 2)).toFixed(1)} MiB
+                        </span>
+                      ) : (
+                        <span style={{ minWidth: 70 }} />
+                      )}
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>→</span>
+                      <input
+                        placeholder={`${bucket} (no change)`}
+                        value={wizard.bucketTargetNames[bucket] ?? ""}
+                        disabled={!selected}
+                        onChange={(e) => wizard.setBucketTargetName(bucket, e.target.value)}
+                        style={{ flex: 1, fontSize: 12 }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </StepShell>
       )}
 
@@ -310,6 +482,26 @@ export default function NewMigrationPage() {
               <span className="cb-badge cb-badge-warning" style={{ marginLeft: 10 }}>Auto-throttling</span>
             )}
           </div>
+
+          {displayedBackup?.status === "complete" && wizard.migrationId && (
+            <div style={{ marginTop: 12 }}>
+              {/* A direct download link, not a fetch() call -- the backend streams a
+                  zip of the archive directory (see GET /api/backup/{id}/download),
+                  which can be multi-GB; letting the browser handle the transfer
+                  natively avoids buffering the whole thing through JS as a blob. */}
+              <a
+                className="cb-btn"
+                href={backupDownloadUrl(wizard.migrationId)}
+                download
+                style={{ textDecoration: "none", display: "inline-block" }}
+              >
+                Download backup
+              </a>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
+                *download optional
+              </div>
+            </div>
+          )}
 
           {displayedBackup?.status === "throttling" && (
             <div className="cb-card" style={{ padding: 12, marginTop: 16, maxWidth: 560 }}>

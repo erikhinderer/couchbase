@@ -60,3 +60,19 @@ export const stopReplication = (id: string, performCutover: boolean) =>
 
 export const chatWithAgent = (message: string, migrationId?: string) =>
   api.post<any>("/api/agent/chat", { message, migration_id: migrationId, use_memory: true });
+
+export const recommendReplicationMode = (
+  cutoverPlan: "cutover" | "phased",
+  sourceTopology: unknown,
+  parallelism: number,
+) =>
+  api.post<any>("/api/agent/recommend-replication-mode", {
+    cutover_plan: cutoverPlan,
+    source_topology: sourceTopology,
+    parallelism,
+  });
+
+// Not a JSON call -- this is a direct download URL for an <a href download> link,
+// so the browser handles the file transfer itself rather than this app buffering
+// the whole (potentially multi-GB) zip through a fetch()/blob round-trip.
+export const backupDownloadUrl = (migrationId: string) => `${API_BASE}/api/backup/${migrationId}/download`;

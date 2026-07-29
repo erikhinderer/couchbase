@@ -524,14 +524,37 @@ class MigrationEngine:
             ),
         }
 
+        # Bucket mapping (wizard's Destination & Mode step, "redirect this bucket to a
+        # different destination bucket"): BucketMigrationSpec.target_bucket_name is
+        # already used by _ensure_destination_buckets() to auto-provision the RENAMED
+        # bucket on Capella -- this is what actually makes cbbackupmgr restore INTO
+        # that renamed bucket instead of trying (and failing) to restore into a bucket
+        # named after the source, which was never created. --map-data's bucket-level
+        # form (source_bucket=target_bucket, no scope/collection suffix) redirects
+        # everything under that bucket unless a more specific rule below overrides it.
+        bucket_name_map: dict[str, str] = {
+            spec.bucket_name: spec.target_bucket_name
+            for spec in record.plan.buckets
+            if spec.include and spec.target_bucket_name and spec.target_bucket_name != spec.bucket_name
+        }
+
         # See _MAP_DATA_COLLECTION_CONFLICT_RE's comment above: a destination bucket
         # that's been restored into before (extremely common while iterating on a real
         # Capella cluster like this) can have scopes/collections whose names match the
         # archive but whose internal ids don't -- cbbackupmgr refuses to guess and asks
         # for --map-data. We detect that from cbbackupmgr's own output and retry with
         # an identity mapping (same name on both sides) rather than failing the whole
-        # migration over something this mechanical.
-        map_data_pairs: set[str] = set()
+        # migration over something this mechanical. When a bucket also has a rename
+        # configured above, the RIGHT-hand side of these mappings must follow that
+        # rename too -- the left side always matches the archive (source names), the
+        # right side always names where it should land on the destination.
+        map_data_pairs: set[str] = set(f"{src}={tgt}" for src, tgt in bucket_name_map.items())
+        if bucket_name_map:
+            self._log(
+                record,
+                "Restoring with bucket redirect(s): "
+                + ", ".join(f"{src} -> {tgt}" for src, tgt in sorted(bucket_name_map.items())),
+            )
         attempt = 0
         while True:
             attempt += 1
@@ -569,11 +592,13 @@ class MigrationEngine:
             for m in _MAP_DATA_COLLECTION_CONFLICT_RE.finditer(output_text):
                 scope, collection = m["scope"], m["collection"]
                 for bucket in buckets:
-                    new_pairs.add(f"{bucket}.{scope}.{collection}={bucket}.{scope}.{collection}")
+                    target_bucket = bucket_name_map.get(bucket, bucket)
+                    new_pairs.add(f"{bucket}.{scope}.{collection}={target_bucket}.{scope}.{collection}")
             for m in _MAP_DATA_SCOPE_CONFLICT_RE.finditer(output_text):
                 scope = m["scope"]
                 for bucket in buckets:
-                    new_pairs.add(f"{bucket}.{scope}={bucket}.{scope}")
+                    target_bucket = bucket_name_map.get(bucket, bucket)
+                    new_pairs.add(f"{bucket}.{scope}={target_bucket}.{scope}")
 
             truly_new = new_pairs - map_data_pairs
             if not truly_new or attempt >= _MAX_MAP_DATA_RETRIES:

@@ -8,9 +8,15 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from app.core.qwen_agent import QwenAgentClient
+from app.core.recommendation import recommend_replication_mode
 from app.core.store import MigrationStore
 from app.memory.couchbase_memory import AgentMemoryStore
-from app.models.schemas import AgentChatRequest, AgentChatResponse
+from app.models.schemas import (
+    AgentChatRequest,
+    AgentChatResponse,
+    ReplicationModeRecommendationRequest,
+    ReplicationModeRecommendationResponse,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -59,3 +65,22 @@ async def chat(req: AgentChatRequest) -> AgentChatResponse:
         logger.warning("Failed to persist chat memory: %s", exc)
 
     return AgentChatResponse(reply=reply, recalled_memories=recalled)
+
+
+@router.post("/recommend-replication-mode", response_model=ReplicationModeRecommendationResponse)
+async def recommend_mode(req: ReplicationModeRecommendationRequest) -> ReplicationModeRecommendationResponse:
+    """Called from the Destination & Mode wizard step once the user answers the
+    cutover-vs-phased question -- see recommendation.py for why this is a fast,
+    deterministic rule engine rather than an LLM call. No migration record exists
+    yet at this point in the wizard, so there's nothing to persist to agent memory
+    here (unlike /chat)."""
+    if req.cutover_plan not in ("cutover", "phased"):
+        raise HTTPException(400, "cutover_plan must be 'cutover' or 'phased'")
+    result = recommend_replication_mode(req.cutover_plan, req.source_topology, req.parallelism)  # type: ignore[arg-type]
+    return ReplicationModeRecommendationResponse(
+        recommended_strategy=result.recommended_strategy,
+        headline=result.headline,
+        rationale=result.rationale,
+        considerations=result.considerations,
+        estimated_duration_seconds=result.estimated_duration_seconds,
+    )

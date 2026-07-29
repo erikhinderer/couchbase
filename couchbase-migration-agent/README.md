@@ -25,27 +25,6 @@ First boot pulls the Qwen model (`qwen3:8b` by default) and initializes the Couc
 Enterprise Edition memory store — this can take a few minutes; subsequent starts are fast
 (cached in the `ollama_data` / `couchbase_memory_data` volumes).
 
-### Corporate network / TLS inspection (Couchbase laptops running Netskope)
-
-If `docker compose up --build` fails during `pip install` or `npm install` with something
-like `SSLError(... 'self-signed certificate in certificate chain' ...)`, or `qwen-service`
-fails to start with `certificate signed by unknown authority`, it's Netskope (or similar
-TLS-inspection software) swapping in its own certificate for HTTPS traffic — neither the
-build containers nor the running Ollama container trust it by default. On a Couchbase-managed
-Mac, fix it once with:
-
-```bash
-./scripts/setup-corporate-ca.sh
-```
-
-This finds the Netskope root CA that Couchbase IT already deployed to your keychain, copies
-it to `certs/corporate-ca.crt`, and every Dockerfile picks it up automatically on the next
-build. Not on Netskope? The build already works without it — `certs/corporate-ca.crt` ships
-empty and every install step just skips it.
-
-On Linux/Windows, or if the script can't find anything, export your org's inspection root CA
-yourself (PEM format) and save it to `certs/corporate-ca.crt`.
-
 ## Step-by-step wizard guide
 
 This walks through the wizard exactly as it runs, from **New Migration** through the moment
@@ -72,6 +51,60 @@ green badge means the app actually talked to that cluster successfully.
   self-managed cluster.
 - Nothing is created on the backend yet at this step; **Next** just advances the wizard.
 
+#### Required source cluster permissions
+
+The wizard shows a short reminder of this right below the Source password field. The
+simplest option is a Couchbase user with the **Full Admin** role — guarantees both
+`cbbackupmgr` and the app's own topology/validation/bottleneck-monitoring REST calls all
+work without hitting a permission wall partway through a migration.
+
+For least privilege instead, per Couchbase's own
+[cbbackupmgr RBAC documentation](https://docs.couchbase.com/server/current/backup-restore/cbbackupmgr-backup.html#rbac):
+
+- **Data Backup & Restore** (`data_backup`), scoped to the buckets being migrated — covers
+  `cbbackupmgr`'s own backup/restore of KV data plus each bucket's view/GSI/FTS index
+  *definitions*.
+- **Read-Only Admin** (`ro_admin`), cluster-wide — this app's own introspection (bucket/node
+  enumeration for validation, XDCR remote detection, and the CPU/memory polling behind
+  bottleneck auto-throttling) reads cluster-admin REST endpoints that `data_backup` alone
+  doesn't cover.
+- Only if the source cluster actually uses them, since `data_backup` explicitly can't read
+  this cluster-level (not per-bucket) data and `cbbackupmgr` will otherwise fail with a
+  permissions error partway through backup: **Analytics Admin** (`analytics_admin`) for
+  Analytics synonyms, **Eventing Full Admin** (`eventing_admin`) for Eventing functions, and
+  **Search Admin** (`fts_admin`) for FTS aliases.
+
+If you'd rather not grant one of the cluster-level roles above for a service you're not
+using, `cbbackupmgr` supports disabling that service for the backup instead (this app doesn't
+currently expose that as a wizard toggle) — see the `--disable-*` flags in
+[`cbbackupmgr config`](https://docs.couchbase.com/server/current/backup-restore/cbbackupmgr-config.html).
+
+#### Allow-listing the agent's IP address
+
+Below the **Connection string** field, on both the Source step and the Destination & Mode
+step, the wizard reminds you to allow-list this agent's IP range on that cluster before
+testing the connection. If a cluster restricts inbound connections — a firewall, an
+AWS/GCP/Azure security group, or Couchbase's own IP allow-listing (common on Capella, and
+available on self-managed clusters too) — a request from an unlisted address typically hangs
+until it times out, or is refused outright, rather than failing with a clear permissions
+error. This can look identical to "the cluster is unreachable" or "wrong hostname," which
+makes it easy to misdiagnose, and it applies equally to the destination (Capella) cluster,
+not just the source.
+
+What to allow-list depends on where this agent is running:
+
+- **On the same machine/network as the source cluster** (e.g. both on the same EC2 VPC):
+  usually nothing extra is needed, or you can allow-list the instance's private IP.
+- **Running elsewhere and reaching the source over the public internet**: allow-list the
+  public IP address of the machine running this application (the same address covered in
+  the deployment `.env`/security-group setup, if you followed a guide for that). If you're
+  not sure what address the source cluster will see, run `curl ifconfig.me` (or similar)
+  from inside the `backend` container (`docker compose exec backend curl -s ifconfig.me`) to
+  see its outbound IP as the source cluster would observe it.
+- **Behind NAT, a VPN, or a corporate proxy**: the outbound IP the source cluster sees may
+  not match any address you'd expect from looking at this machine directly — the `curl
+  ifconfig.me` check above is the most reliable way to confirm it either way.
+
 ### 2. Destination & Mode
 
 - Same connection fields as Source, plus a **This endpoint is a Couchbase Capella cluster**
@@ -82,6 +115,33 @@ green badge means the app actually talked to that cluster successfully.
   blank if the destination buckets already exist.
 - Click **Test destination connection** for the same kind of live check as the source step;
   success shows a `Reachable` badge.
+
+#### Ask the agent: which replication mode fits?
+
+Once the source has been introspected, an **Ask the agent** card appears above the
+Replication mode choices, asking one question: are you planning to cut every application
+over to the destination at the same time, or migrate them gradually (a phased cutover)?
+Answering calls a recommendation engine (`POST /api/agent/recommend-replication-mode`) with
+your answer plus the source topology already fetched in step 1 — XDCR remotes in use, bucket
+count, and total/per-bucket data size — and returns a recommended mode with a plain-language
+rationale, a rough one-time-transfer duration estimate, and any other considerations worth
+knowing (e.g. a dominant bucket, or XDCR already pointed elsewhere). Click **Use this mode**
+to apply it to the Replication mode selector below, or **Ask again** to reconsider.
+
+This is deliberately a fast, deterministic rule engine (see
+`backend/app/core/recommendation.py`) rather than a live call to the local Qwen LLM used for
+chat — the rest of this app already leans toward explainable, non-LLM logic for anything that
+gates a real infrastructure decision (see "Bottleneck detection" below), and a wizard step
+shouldn't be exposed to LLM latency or a hallucinated recommendation. In broad strokes: a
+phased cutover always points toward **Bulk copy + continuous sync** (data needs to stay in
+sync while different applications switch over on their own schedules — a one-time snapshot
+can't do that); an all-at-once cutover recommends **One-time migration** if the estimated
+transfer comfortably fits a single maintenance window, or **Bulk copy + continuous sync**
+if it wouldn't, since staging most of the data ahead of time shrinks the actual outage window
+even when every application still switches over at once. The duration estimate is a rough
+planning figure, not a measurement — real `cbbackupmgr` throughput depends on network, disk,
+and cluster load that can't be known ahead of time.
+
 - Choose a **Replication mode** — this is a one-time choice made here, not something you
   switch later without starting a new migration:
   - **One-time migration** — a single `cbbackupmgr restore` snapshot; the migration finishes
@@ -90,6 +150,26 @@ green badge means the app actually talked to that cluster successfully.
     approval; you stop it later from the migration detail page (cutover or halt).
   - **Bulk copy + continuous sync** — a one-time restore for existing data, then XDCR takes
     over for the ongoing delta.
+
+#### Bucket mapping
+
+Below the Replication mode choices, every bucket detected on the source is listed with a
+checkbox (migrate it or not — at least one must stay checked to proceed) and an optional
+target bucket name field, showing each bucket's data size where available. Leaving the
+target field blank restores into a same-named destination bucket, as before; filling it in
+redirects that bucket's data to a differently-named destination bucket instead — useful for
+consolidating buckets, or when the desired name is already taken on the destination.
+
+Under the hood this uses `cbbackupmgr restore`'s `--map-data` flag (the same mechanism
+already used to auto-resolve stale scope/collection id conflicts on repeated test
+migrations — see "Troubleshooting backups" below) with a bucket-level mapping
+(`source_bucket=target_bucket`) that redirects everything under that bucket unless a more
+specific scope/collection rule overrides it. If a bucket has a mapping configured and
+Capella auto-provisioning is enabled (project/cluster ID + `CAPELLA_API_TOKEN`/
+`CAPELLA_ORG_ID` set), the *renamed* bucket is what actually gets created on the
+destination — so a mapped bucket restores correctly even if the destination never had a
+bucket under the source's original name.
+
 - Clicking **Create & validate** is what actually creates the migration record on the
   backend (`POST /api/migrations`) and immediately runs validation — this is the point where
   a `migration_id` first exists, though nothing has touched your data yet.
@@ -128,6 +208,14 @@ green badge means the app actually talked to that cluster successfully.
   bottleneck it can't fix by itself (e.g. a stalled or degraded transfer that isn't a
   thread-count problem) shows up there too, as a suggestion instead. See "Bottleneck
   detection" below.
+- Once the backup completes, a **Download backup** button appears, marked *download
+  optional — the migration itself doesn't need you to click it; rollback restores the source
+  from the same server-side archive regardless. It's there for anyone who wants their own
+  copy off this app's infrastructure (e.g. for archival, or to hand to another tool).
+  Clicking it streams a zip of the backup archive directly from the backend
+  (`GET /api/backup/{migration_id}/download`); for a large source cluster this zip can take
+  a while to assemble server-side before the browser's download starts, since the archive is
+  compressed on demand rather than pre-zipped.
 
 ### 5. Review & approve
 
@@ -417,7 +505,10 @@ docs for the full reference.
 
 1. **New Migration** → enter source cluster connection details, test/introspect it.
 2. Enter destination (Capella) connection details — a Capella endpoint, DB credentials, and
-   (optionally) project/cluster IDs + an API token for automatic bucket provisioning.
+   (optionally) project/cluster IDs + an API token for automatic bucket provisioning. Answer
+   the agent's cutover-vs-phased question for a recommended replication mode, and optionally
+   redirect any source bucket to a differently-named destination bucket (see "Bucket
+   mapping" above).
 3. **Validate** — checks version compatibility (7.2.0–8.0.2), connectivity, RBAC, schema/index
    compatibility, XDCR topology, TLS, and network latency. Errors block progress; warnings don't.
 4. **Backup** — runs `cbbackupmgr` against the source. The migration cannot be approved until

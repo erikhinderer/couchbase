@@ -4,9 +4,14 @@ interface Props {
   value: ClusterFormState;
   onChange: (patch: Partial<ClusterFormState>) => void;
   disableCapellaToggle?: boolean;
+  /** Extra content rendered directly below the Password field -- used by the Source
+   * step to show the required Couchbase user permissions right where the user is
+   * about to type credentials, without hard-coding source-only copy into this
+   * shared (source + destination) form component. */
+  belowPassword?: React.ReactNode;
 }
 
-export default function ClusterConfigForm({ value, onChange, disableCapellaToggle }: Props) {
+export default function ClusterConfigForm({ value, onChange, disableCapellaToggle, belowPassword }: Props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 480 }}>
       <Field label="Friendly name">
@@ -37,6 +42,10 @@ export default function ClusterConfigForm({ value, onChange, disableCapellaToggl
           placeholder="couchbase://10.0.0.11,10.0.0.12"
         />
       </Field>
+      <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: -8 }}>
+        *ensure to add the IP range of the Couchbase Migration Assistant to the source and
+        destination Couchbase servers Allowed IP Addresses
+      </div>
 
       {value.is_capella && (
         <>
@@ -65,6 +74,7 @@ export default function ClusterConfigForm({ value, onChange, disableCapellaToggl
           onChange={(e) => onChange({ password: e.target.value })}
         />
       </Field>
+      {belowPassword}
 
       <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
         <input
