@@ -35,7 +35,7 @@ green badge means the app actually talked to that cluster successfully.
 *You will need an administrator account on the source and destination servers or a tailored role with the required permissions. 
 Link to reqiuired permissions: https://github.com/erikhinderer/couchbase/tree/main/couchbase-migration-agent#required-source-cluster-permissions
 
-*Ensure to add the IP address / range of the Couchbase Migration Agent to the source and destination servers Allowed IP Addresses.
+*Ensure to add the IP address / range of the Couchbase Migration Agent to the source and destination Couchbase servers Allowed IP Addresses and that ports TCP/22, TCP 8091-8097, TCP 9102 and TCP/11210 are open in your firewall or security group, from the Couchbase Migration Agent to each Couchbase server.
 
 ### 1. Source
 
