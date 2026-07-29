@@ -246,7 +246,7 @@ bucket under the source's original name.
 | Component | Tech | Purpose |
 |---|---|---|
 | `frontend/` | React + TypeScript + Vite | Dark-mode UI: setup wizard, topology diagrams, live stats dashboard, agent chat |
-| `backend/` | FastAPI (Python) | REST + WebSocket API, validation, migration orchestration, backup/rollback |
+| `backend/` | Couchbase SDK + FastAPI (Python) | REST + WebSocket API, validation, migration orchestration, backup/rollback |
 | `qwen-service/` | Ollama serving Qwen 3.8 | Local LLM for the in-app migration assistant and memory embeddings — nothing leaves the Docker network |
 | `couchbase-memory/` | Couchbase Enterprise Edition (free, dev/test license) | Agent long-term memory (past validations, decisions, incidents), recalled via native vector search |
 | `scripts/init_memory.py` | Python | One-shot bootstrap: creates the memory bucket/scope/collection and the FTS vector index |
