@@ -1,0 +1,30 @@
+services:
+  data-generator:
+    build: .
+    container_name: couchbase-data-generator
+    ports:
+      - "4300:4300"
+    environment:
+      - PORT=4300
+    restart: unless-stopped
+    # Point the app at a Couchbase cluster reachable from this container.
+    # If Couchbase is running on your host machine (outside Docker), use
+    # "host.docker.internal" as the connection string host on Mac/Windows.
+
+  # Optional: uncomment to spin up a local single-node Couchbase Server
+  # to test against instead of a real cluster. After it starts, open
+  # http://localhost:8091 once to run cluster setup and create a bucket,
+  # then use "couchbase://couchbase-server" as the connection string
+  # (from inside this compose network) when configuring the generator.
+  #
+  # couchbase-server:
+  #   image: couchbase:community-7.6.2
+  #   container_name: couchbase-server
+  #   ports:
+  #     - "8091-8096:8091-8096"
+  #     - "11210:11210"
+  #   volumes:
+  #     - couchbase-data:/opt/couchbase/var
+
+# volumes:
+#   couchbase-data:

@@ -1,0 +1,16 @@
+{
+  "name": "couchbase-data-generator",
+  "version": "1.0.0",
+  "description": "Couchbase Data Generator - a mock Customer 360 data generator for Couchbase, with a configuration wizard and live animated dashboard.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@faker-js/faker": "^8.4.1",
+    "couchbase": "^4.3.0",
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  }
+}

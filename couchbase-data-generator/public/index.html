@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Couchbase Data Generator</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-icon">◉</span>
+      <span class="brand-text">Couchbase <span class="accent">Data<br/>Generator</span></span>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" data-view="dashboard">
+        <span class="nav-icon">▦</span> Dashboard
+      </button>
+      <button class="nav-item" data-view="wizard">
+        <span class="nav-icon">＋</span> Configuration
+      </button>
+    </nav>
+    <div class="sidebar-footer">Couchbase SDK 4.x &middot; Node.js</div>
+  </aside>
+
+  <main class="content">
+
+    <!-- ===================== DASHBOARD VIEW ===================== -->
+    <section id="dashboardView" class="view">
+      <div class="page-header">
+        <div>
+          <h1>Dashboard</h1>
+          <p class="subtitle">Mock Customer 360 profiles &rarr; Couchbase bucket</p>
+        </div>
+        <div class="header-actions">
+          <span id="statusBadge" class="badge badge-idle">IDLE</span>
+          <button id="startStopBtn" class="btn btn-primary" disabled>Start Generator</button>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">Documents Generated</div>
+          <div id="statDocs" class="stat-value">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Throughput</div>
+          <div id="statThroughput" class="stat-value accent-teal">0.00 MB/s</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Docs / Sec</div>
+          <div id="statDocsPerSec" class="stat-value">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Error Rate</div>
+          <div id="statErrorRate" class="stat-value">0.00%</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Elapsed</div>
+          <div id="statElapsed" class="stat-value">0s</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Target Rate</div>
+          <div id="statTarget" class="stat-value">1.00 MB/s</div>
+        </div>
+      </div>
+
+      <div class="panel flow-panel">
+        <svg id="flowSvg" viewBox="0 0 1200 260" preserveAspectRatio="xMidYMid meet">
+          <!-- connecting lines -->
+          <line id="lineLeft" x1="330" y1="130" x2="520" y2="130" class="flow-line" />
+          <line id="lineRight" x1="680" y1="130" x2="870" y2="130" class="flow-line" />
+          <!-- animated flow dashes (drawn over lines) -->
+          <line id="pulseLeft" x1="330" y1="130" x2="520" y2="130" class="flow-pulse" />
+          <line id="pulseRight" x1="680" y1="130" x2="870" y2="130" class="flow-pulse" />
+          <!-- arrowheads -->
+          <polygon points="512,123 528,130 512,137" class="flow-arrow" />
+          <polygon points="862,123 878,130 862,137" class="flow-arrow" />
+
+          <!-- Source node: Mock Data Generator -->
+          <g transform="translate(90,70)">
+            <rect width="240" height="120" rx="10" class="node-box node-source" />
+            <text x="18" y="30" class="node-title">Data Generator</text>
+            <text x="18" y="52" class="node-sub">Synthetic Customer 360</text>
+            <circle cx="26" cy="76" r="4" class="node-dot node-dot-idle" />
+            <text id="flowGenLabel" x="38" y="80" class="node-detail">idle</text>
+            <text id="flowDocLabel" x="18" y="100" class="node-footer">0 docs generated</text>
+          </g>
+
+          <!-- Middle node: Generator Agent -->
+          <g transform="translate(520,55)">
+            <rect width="160" height="150" rx="12" class="node-box node-agent" />
+            <text x="80" y="45" text-anchor="middle" class="node-icon">⬢</text>
+            <text x="80" y="95" text-anchor="middle" class="node-title-mid">GENERATOR</text>
+            <text x="80" y="112" text-anchor="middle" class="node-title-mid">AGENT</text>
+          </g>
+
+          <!-- Destination node: Couchbase -->
+          <g transform="translate(870,70)">
+            <rect width="240" height="120" rx="10" class="node-box node-dest" />
+            <text x="18" y="30" class="node-title">Couchbase Server</text>
+            <text id="flowBucketLabel" x="18" y="52" class="node-sub">bucket: &mdash;</text>
+            <circle cx="26" cy="76" r="4" class="node-dot node-dot-idle" />
+            <text id="flowConnLabel" x="38" y="80" class="node-detail">not connected</text>
+            <text x="18" y="100" class="node-footer">Couchbase SDK 4.x</text>
+          </g>
+        </svg>
+        <div id="throughputLabel" class="flow-throughput">0.00 MB/s</div>
+      </div>
+
+      <div class="panel chart-panel">
+        <div class="panel-title">THROUGHPUT (MB/S)</div>
+        <canvas id="throughputChart" height="140"></canvas>
+      </div>
+
+      <div id="errorPanel" class="panel error-panel hidden">
+        <div class="panel-title">Last Error</div>
+        <div id="errorText" class="error-text"></div>
+      </div>
+    </section>
+
+    <!-- ===================== WIZARD VIEW ===================== -->
+    <section id="wizardView" class="view hidden">
+      <div class="page-header">
+        <div>
+          <h1>Configuration</h1>
+          <p class="subtitle">Connect to Couchbase, set your generation rate, then start the generator.</p>
+        </div>
+      </div>
+
+      <div class="steps">
+        <div class="step active" data-step="1"><span class="step-num">1</span> Connection</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="2"><span class="step-num">2</span> Generation Settings</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="3"><span class="step-num">3</span> Review &amp; Start</div>
+      </div>
+
+      <!-- Step 1: Connection -->
+      <div class="panel step-panel" data-step-panel="1">
+        <h3>Cluster connection</h3>
+
+        <label>Connection string</label>
+        <input id="cfgConnStr" type="text" placeholder="couchbase://127.0.0.1" value="couchbase://" />
+
+        <label>Username</label>
+        <input id="cfgUsername" type="text" placeholder="Administrator" />
+
+        <label>Password</label>
+        <input id="cfgPassword" type="password" placeholder="Password" />
+
+        <label class="checkbox-row"><input id="cfgTLS" type="checkbox" /> Use TLS (couchbases://)</label>
+
+        <div class="test-row">
+          <button id="testConnBtn" class="btn btn-secondary">Test &amp; introspect cluster</button>
+          <span id="testConnResult" class="test-result"></span>
+        </div>
+
+        <div class="step-actions">
+          <button class="btn btn-primary" data-next="2">Next</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Generation settings -->
+      <div class="panel step-panel hidden" data-step-panel="2">
+        <h3>Bucket &amp; generation rate</h3>
+
+        <label>Bucket name</label>
+        <input id="cfgBucket" type="text" placeholder="customer360" />
+
+        <div class="field-row">
+          <div>
+            <label>Scope (optional)</label>
+            <input id="cfgScope" type="text" placeholder="_default" />
+          </div>
+          <div>
+            <label>Collection (optional)</label>
+            <input id="cfgCollection" type="text" placeholder="_default" />
+          </div>
+        </div>
+
+        <label>Rate of data generation (MB/s)</label>
+        <input id="cfgRate" type="number" min="0.01" step="0.1" value="1" />
+        <p class="hint">Default is 1 MB/s. The generator paces synthetic Customer 360 document writes to approximate this throughput.</p>
+
+        <div class="step-actions">
+          <button class="btn btn-tertiary" data-prev="1">Back</button>
+          <button class="btn btn-primary" data-next="3">Next</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Review -->
+      <div class="panel step-panel hidden" data-step-panel="3">
+        <h3>Review &amp; start</h3>
+        <div class="review-grid">
+          <div><span class="review-label">Connection string</span><span id="revConnStr" class="review-value">&mdash;</span></div>
+          <div><span class="review-label">Username</span><span id="revUsername" class="review-value">&mdash;</span></div>
+          <div><span class="review-label">TLS</span><span id="revTLS" class="review-value">&mdash;</span></div>
+          <div><span class="review-label">Bucket</span><span id="revBucket" class="review-value">&mdash;</span></div>
+          <div><span class="review-label">Scope / Collection</span><span id="revScopeColl" class="review-value">&mdash;</span></div>
+          <div><span class="review-label">Rate</span><span id="revRate" class="review-value">&mdash;</span></div>
+        </div>
+        <div id="wizardError" class="error-text hidden"></div>
+        <div class="step-actions">
+          <button class="btn btn-tertiary" data-prev="2">Back</button>
+          <button id="wizardStartBtn" class="btn btn-primary">Save &amp; Start Generator</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
