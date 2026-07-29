@@ -11,6 +11,26 @@ FROM ollama/ollama:latest
 ENV OLLAMA_HOST=0.0.0.0:11434
 ENV QWEN_MODEL=qwen3:8b
 
+# Trust an optional corporate/proxy root CA before entrypoint.sh pulls the
+# model at container startup. Unlike backend/frontend, this isn't a build-time
+# `pip`/`npm install` issue -- `ollama pull` runs at *runtime* against
+# registry.ollama.ai/ollama.com, and Ollama (a Go binary) verifies TLS against
+# the OS's system cert pool. Baking the corporate cert into
+# /etc/ssl/certs/ca-certificates.crt here (ollama/ollama:latest is
+# ubuntu:24.04-based) makes it part of the image, so it's already trusted by
+# the time the container starts and pulls the model. Otherwise, behind an
+# SSL-inspecting proxy this fails with:
+#   tls: failed to verify certificate: x509: certificate signed by unknown authority
+# Exported by scripts/setup-corporate-ca.sh into qwen-service/certs/; a no-op
+# if that hasn't been run / isn't needed.
+COPY certs/ /usr/local/share/ca-certificates/extra/
+RUN if find /usr/local/share/ca-certificates/extra -name '*.crt' 2>/dev/null | grep -q .; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends ca-certificates && \
+      update-ca-certificates && \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

@@ -3,9 +3,11 @@
 certs/*.crt
 backend/certs/*.crt
 frontend/certs/*.crt
+qwen-service/certs/*.crt
 !certs/.gitkeep
 !backend/certs/.gitkeep
 !frontend/certs/.gitkeep
+!qwen-service/certs/.gitkeep
 
 # Common local cruft
 .env

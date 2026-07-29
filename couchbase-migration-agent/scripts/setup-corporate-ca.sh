@@ -13,16 +13,18 @@
 #   SSLCertVerificationError: self-signed certificate in certificate chain
 #
 # This script exports the certs and drops them into certs/ (repo root),
-# backend/certs/, and frontend/certs/ -- one per Docker build context, since
-# each of those services builds from its own directory and COPY can't reach
-# outside it. The corresponding Dockerfiles pick these up automatically and
-# add them to the container's trust store before installing dependencies.
+# backend/certs/, frontend/certs/, and qwen-service/certs/ -- one per Docker
+# build context, since each of those services builds from its own directory
+# and COPY can't reach outside it. The corresponding Dockerfiles pick these up
+# automatically and add them to the container's trust store -- backend/
+# frontend need it before `pip`/`npm install` at build time, qwen-service
+# needs it baked in before its entrypoint pulls the model at container start.
 # Machines that don't need this (no corporate proxy) just get empty certs/
 # directories, which the Dockerfiles treat as a no-op.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST_DIRS=("$REPO_ROOT/certs" "$REPO_ROOT/backend/certs" "$REPO_ROOT/frontend/certs")
+DEST_DIRS=("$REPO_ROOT/certs" "$REPO_ROOT/backend/certs" "$REPO_ROOT/frontend/certs" "$REPO_ROOT/qwen-service/certs")
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This script currently only supports macOS (it uses the 'security' CLI to read the keychain)." >&2

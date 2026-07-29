@@ -369,30 +369,39 @@ entirely from `cbbackupmgr`'s own output.
 
 ### Troubleshooting a build failure behind a corporate proxy
 
-If `docker compose up --build` fails during `pip install` or `npm install` with something
-like:
+If `docker compose up --build` fails during `pip install` or `npm install`, or `qwen-service`
+keeps restarting while trying to pull the model, with something like:
 
 ```
 SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed:
 self-signed certificate in certificate chain
 ```
 
+or
+
+```
+Error: pull model manifest: Get "https://registry.ollama.ai/...": tls: failed to verify
+certificate: x509: certificate signed by unknown authority
+```
+
 your laptop is behind an SSL-inspecting corporate proxy (Zscaler, Netskope, Palo Alto
 GlobalProtect, etc., usually pushed via MDM). Docker Desktop's own image pulls go through
-macOS's system trust store, so those succeed — but pip/npm inside the build verify against
-their own bundled CA stores, which have never heard of your proxy's root cert.
+macOS's system trust store, so those succeed — but pip/npm at build time, and Ollama's Go
+binary when it pulls the model at container startup, each verify against their own bundled CA
+stores, which have never heard of your proxy's root cert.
 
 Fix:
 
 ```bash
 ./scripts/setup-corporate-ca.sh   # exports the cert from your Mac's keychain
 docker compose build --no-cache
+docker compose up
 ```
 
-This drops the exported cert into `certs/`, `backend/certs/`, and `frontend/certs/` (one per
-Docker build context) — gitignored, machine-specific, and a no-op on machines that don't need
-it. macOS only; on Linux, save your org's proxy root CA as `corporate-ca.crt` in each of those
-three directories yourself.
+This drops the exported cert into `certs/`, `backend/certs/`, `frontend/certs/`, and
+`qwen-service/certs/` (one per Docker build context) — gitignored, machine-specific, and a
+no-op on machines that don't need it. macOS only; on Linux, save your org's proxy root CA as
+`corporate-ca.crt` in each of those four directories yourself.
 
 ### Troubleshooting first boot
 
