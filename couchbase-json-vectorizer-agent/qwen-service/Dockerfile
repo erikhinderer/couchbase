@@ -12,6 +12,18 @@ FROM ollama/ollama:latest
 ENV OLLAMA_HOST=0.0.0.0:11434
 ENV QWEN_MODEL=qwen3:8b
 
+# Trust an optional corporate TLS-inspection root CA (e.g. Netskope) -- see
+# scripts/setup-corporate-ca.sh. No-op if certs/corporate-ca.crt is empty.
+# `ollama pull` in entrypoint.sh happens at container *runtime*, not here, but
+# baking the cert into the image now means it's already trusted by the Go
+# runtime's system cert pool when that pull happens.
+COPY --from=corporate-ca . /tmp/corporate-ca/
+RUN if [ -s /tmp/corporate-ca/corporate-ca.crt ]; then \
+      cp /tmp/corporate-ca/corporate-ca.crt /usr/local/share/ca-certificates/corporate-ca.crt && \
+      update-ca-certificates; \
+    fi && \
+    rm -rf /tmp/corporate-ca
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

@@ -123,6 +123,36 @@ or which model to pick.
      (`embedding-service/app/main.py` retries a model load once after a few
      seconds) but a persistent failure means one of the above.
 
+### Corporate network / TLS inspection
+
+Couchbase-managed laptops run Netskope, which does TLS inspection -- it swaps
+in its own root CA for HTTPS traffic, including pypi.org and the npm registry.
+Without that CA trusted inside the Docker build containers, `docker compose
+up --build` fails partway through, e.g. an `apk`/`apt`/`pip`/`npm` step with a
+`certificate verify failed` or `self-signed certificate in certificate chain`
+error.
+
+Fix it once per machine:
+
+```bash
+./scripts/setup-corporate-ca.sh
+docker compose up --build
+```
+
+This finds Netskope's root CA in your Mac's keychain (pushed there by
+Couchbase IT/MDM) and writes it to `certs/corporate-ca.crt`. Every
+Dockerfile's build stages that hit the network (`apk add`, `apt-get`, `pip
+install`, `npm install`) copy that file in via a shared `corporate-ca` build
+context (see `additional_contexts` in `docker-compose.yml`) and trust it
+before making any request -- a no-op if the file is empty, so nothing changes
+for anyone not behind Netskope. The file itself is git-tracked but
+empty/placeholder in the repo; the script marks it `skip-worktree` after
+writing your real CA into it, so it won't show up as a change to commit.
+
+Not on a Couchbase-managed Mac, or the script doesn't find anything? Export
+your org's TLS-inspection root CA yourself (Keychain Access on macOS, or your
+platform's cert store) and save it, in PEM format, to `certs/corporate-ca.crt`.
+
 ## Configuration notes
 
 - **Multiple source buckets**: the wizard's **+ Add bucket** button adds entries to

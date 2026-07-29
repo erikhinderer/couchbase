@@ -4,7 +4,10 @@ services:
   # Runs on CPU by default. For an NVIDIA GPU on Linux:
   #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
   qwen-service:
-    build: ./qwen-service
+    build:
+      context: ./qwen-service
+      additional_contexts:
+        corporate-ca: ./certs
     container_name: vectorizer-qwen
     volumes:
       - ollama_data:/root/.ollama
@@ -20,7 +23,10 @@ services:
 
   # -- Embedding service: serves the user-selected Hugging Face model ---------
   embedding-service:
-    build: ./embedding-service
+    build:
+      context: ./embedding-service
+      additional_contexts:
+        corporate-ca: ./certs
     container_name: vectorizer-embeddings
     volumes:
       - embedding_model_cache:/data/hf-cache
@@ -36,7 +42,10 @@ services:
 
   # -- FastAPI backend / vectorizer engine -------------------------------------
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      additional_contexts:
+        corporate-ca: ./certs
     container_name: vectorizer-backend
     env_file:
       - path: .env
@@ -57,7 +66,10 @@ services:
 
   # -- React dark-mode UI, served over HTTPS on 443 ----------------------------
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      additional_contexts:
+        corporate-ca: ./certs
     container_name: vectorizer-frontend
     ports:
       - "443:443"
