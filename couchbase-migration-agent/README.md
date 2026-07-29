@@ -546,22 +546,6 @@ docs for the full reference.
 
 ## Using the agent
 
-1. **New Migration** → enter source cluster connection details, test/introspect it.
-2. Enter destination (Capella) connection details — a Capella endpoint, DB credentials, and
-   (optionally) project/cluster IDs + an API token for automatic bucket provisioning. Answer
-   the agent's cutover-vs-phased question for a recommended replication mode, and optionally
-   redirect any source bucket to a differently-named destination bucket (see "Bucket
-   mapping" above).
-3. **Validate** — checks version compatibility (7.2.0–8.0.2), connectivity, RBAC, schema/index
-   compatibility, XDCR topology, TLS, and network latency. Errors block progress; warnings don't.
-4. **Backup** — runs `cbbackupmgr` against the source. The migration cannot be approved until
-   this completes successfully.
-5. **Approve** — a named human sign-off gate. Nothing transfers before this.
-6. **Start** — live transfer begins; the dashboard streams throughput, docs migrated, error
-   rate, and ETA over a websocket, rendered on an AWS-DMS-style topology diagram.
-7. **Rollback** — available from the migration detail page at any point after a backup exists;
-   restores the source cluster to its exact pre-migration state.
-
 Ask the agent panel (bottom-right) about validation failures, migration strategy, or "what
 happened last time we hit an XDCR warning like this" — it recalls similar past events from
 Couchbase-backed agent memory via native vector search (see the Enterprise Edition note
