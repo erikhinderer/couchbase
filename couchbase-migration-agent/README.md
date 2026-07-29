@@ -12,7 +12,7 @@ Couchbase Server **7.2.0 through 8.0.2**.
 cp env.example .env
 # edit .env: set MEMORY_CB_PASSWORD, and CAPELLA_API_TOKEN / CAPELLA_ORG_ID if you want
 # automatic destination bucket provisioning via the Capella Management API.
-
+./scripts/setup-corporate-ca.sh
 docker compose up --build
 ```
 
