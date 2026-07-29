@@ -18,23 +18,6 @@ FROM python:3.11-slim AS base
 
 WORKDIR /app
 
-# --- Corporate TLS inspection support -------------------------------------
-# If pip fails here with "self-signed certificate in certificate chain",
-# your network (Zscaler, Netskope, a corporate VPN, etc.) is intercepting
-# HTTPS to pypi.org and this container doesn't trust its root CA. Export that
-# CA from macOS Keychain Access and overwrite certs/corporate-ca.crt (repo
-# root) with it -- see README for the exact steps. Left empty (the default),
-# this is a no-op and update-ca-certificates just skips it. `certs` here is
-# the additional build context wired up in docker-compose.yml, since this
-# service's own build context is ./backend, not the repo root.
-COPY --from=certs corporate-ca.crt /usr/local/share/ca-certificates/corporate-ca.crt
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-    && update-ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
-    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
-    PIP_CERT=/etc/ssl/certs/ca-certificates.crt
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

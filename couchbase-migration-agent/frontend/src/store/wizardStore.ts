@@ -31,6 +31,10 @@ interface WizardState {
   destination: ClusterFormState;
   strategy: WizardStrategy;
   selectedBuckets: string[];
+  // Source bucket name -> destination bucket name, only populated for buckets the
+  // user has explicitly redirected (Destination & Mode step's bucket mapping list).
+  // A bucket with no entry here just restores under its own name, as before.
+  bucketTargetNames: Record<string, string>;
   migrationId?: string;
   setStep: (n: number) => void;
   setMigrationName: (v: string) => void;
@@ -38,6 +42,8 @@ interface WizardState {
   updateDestination: (patch: Partial<ClusterFormState>) => void;
   setStrategy: (s: WizardState["strategy"]) => void;
   setSelectedBuckets: (b: string[]) => void;
+  toggleSelectedBucket: (bucket: string) => void;
+  setBucketTargetName: (bucket: string, target: string) => void;
   setMigrationId: (id: string) => void;
   reset: () => void;
 }
@@ -49,12 +55,29 @@ export const useWizardStore = create<WizardState>((set) => ({
   destination: emptyCluster("Capella Destination", true),
   strategy: "backup_restore",
   selectedBuckets: [],
+  bucketTargetNames: {},
   setStep: (n) => set({ step: n }),
   setMigrationName: (v) => set({ migrationName: v }),
   updateSource: (patch) => set((s) => ({ source: { ...s.source, ...patch } })),
   updateDestination: (patch) => set((s) => ({ destination: { ...s.destination, ...patch } })),
   setStrategy: (strategy) => set({ strategy }),
   setSelectedBuckets: (selectedBuckets) => set({ selectedBuckets }),
+  toggleSelectedBucket: (bucket) =>
+    set((s) => ({
+      selectedBuckets: s.selectedBuckets.includes(bucket)
+        ? s.selectedBuckets.filter((b) => b !== bucket)
+        : [...s.selectedBuckets, bucket],
+    })),
+  setBucketTargetName: (bucket, target) =>
+    set((s) => {
+      const next = { ...s.bucketTargetNames };
+      // An empty/whitespace-only target means "no rename" -- drop the entry rather
+      // than persist a blank string, so downstream code can treat "not in the map"
+      // and "explicitly set to nothing" as the same thing.
+      if (target.trim()) next[bucket] = target.trim();
+      else delete next[bucket];
+      return { bucketTargetNames: next };
+    }),
   setMigrationId: (migrationId) => set({ migrationId }),
   reset: () =>
     set({
@@ -64,6 +87,7 @@ export const useWizardStore = create<WizardState>((set) => ({
       destination: emptyCluster("Capella Destination", true),
       strategy: "backup_restore",
       selectedBuckets: [],
+      bucketTargetNames: {},
       migrationId: undefined,
     }),
 }));

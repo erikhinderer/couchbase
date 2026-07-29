@@ -71,17 +71,7 @@ services:
   # run with the optional override file:
   #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
   qwen-service:
-    build:
-      context: ./qwen-service
-      # Lets qwen-service/Dockerfile pull certs/corporate-ca.crt (repo root) in
-      # via `COPY --from=certs ...` even though this service's own build
-      # context is ./qwen-service -- see the TLS-inspection comment in that
-      # Dockerfile. Needed here too: `ollama pull` at container *runtime*
-      # (not just image build) talks to registry.ollama.ai over HTTPS, and
-      # fails the same self-signed-cert way if the running container doesn't
-      # trust the corporate root CA either.
-      additional_contexts:
-        certs: ./certs
+    build: ./qwen-service
     restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
@@ -99,13 +89,7 @@ services:
 
   # -- FastAPI backend / migration engine -----------------------------------
   backend:
-    build:
-      context: ./backend
-      # Lets backend/Dockerfile pull certs/corporate-ca.crt (repo root) in via
-      # `COPY --from=certs ...` even though this service's own build context
-      # is ./backend -- see the TLS-inspection comment in that Dockerfile.
-      additional_contexts:
-        certs: ./certs
+    build: ./backend
     restart: unless-stopped
     env_file:
       - path: .env
@@ -146,11 +130,6 @@ services:
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
         VITE_WS_BASE_URL: ${VITE_WS_BASE_URL:-ws://localhost:8000}
-      # Lets frontend/Dockerfile pull certs/corporate-ca.crt (repo root) in via
-      # `COPY --from=certs ...` even though this service's own build context
-      # is ./frontend -- see the TLS-inspection comment in that Dockerfile.
-      additional_contexts:
-        certs: ./certs
     restart: unless-stopped
     ports:
       - "5173:5173"

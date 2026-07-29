@@ -91,6 +91,11 @@ class ClusterTopologySnapshot(BaseModel):
     xdcr_remotes: list[XDCRRemote] = Field(default_factory=list)
     fts_indexes: list[str] = Field(default_factory=list)
     gsi_indexes: list[str] = Field(default_factory=list)
+    # bucket_name -> {"item_count": int, "data_size_bytes": int}, from the same
+    # per-bucket basicStats already fetched to build total_docs/total_data_size_bytes
+    # above -- surfaced per-bucket too for the bucket mapping UI and the replication
+    # mode recommendation engine (see app/core/recommendation.py).
+    per_bucket_stats: dict[str, dict] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -306,3 +311,26 @@ class AgentChatResponse(BaseModel):
     reply: str
     recalled_memories: list[str] = Field(default_factory=list)
     suggested_actions: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Replication mode recommendation (Destination & Mode wizard step)
+# ---------------------------------------------------------------------------
+
+class ReplicationModeRecommendationRequest(BaseModel):
+    """No migration_id here on purpose -- this is called from the Destination &
+    Mode wizard step, before a migration record exists (that's only created when
+    the user clicks "Create & validate" on this same step). The already-introspected
+    source topology from the wizard's own Test & introspect source call is passed
+    straight through instead of being re-fetched server-side."""
+    cutover_plan: str = Field(..., description="'cutover' (all applications switch over at once) or 'phased'")
+    source_topology: ClusterTopologySnapshot
+    parallelism: int = Field(4, ge=1, le=32)
+
+
+class ReplicationModeRecommendationResponse(BaseModel):
+    recommended_strategy: MigrationStrategy
+    headline: str
+    rationale: str
+    considerations: list[str] = Field(default_factory=list)
+    estimated_duration_seconds: Optional[float] = None
