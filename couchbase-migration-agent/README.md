@@ -25,7 +25,7 @@ First boot pulls the Qwen model (`qwen3:8b` by default) and initializes the Couc
 Enterprise Edition memory store — this can take a few minutes; subsequent starts are fast
 (cached in the `ollama_data` / `couchbase_memory_data` volumes).
 
-## Preparation
+## Migration Prep
 
 You will need an administrator account on the source and destination servers or a tailored role with the required permissions. 
 https://github.com/erikhinderer/couchbase/tree/main/couchbase-migration-agent#required-source-cluster-permissions
