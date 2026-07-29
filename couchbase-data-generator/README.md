@@ -1,10 +1,12 @@
 # Couchbase Data Generator
 
-A small web app that generates mock Customer 360 profile documents and
+An automatic, controllable, mock data generation tool to provide a quick an easy method of generating mock data for Couchbase field teams use in demonstrations and development.
+
+Couchbase Data Generator generates mock Customer 360 profile documents and
 writes them into a Couchbase Server (or Capella) bucket using the
 **official Couchbase Node.js SDK** (`couchbase` npm package). It includes
 a configuration wizard and a live dashboard with an animated data-flow
-diagram, styled after the Couchbase Migration Agent UI.
+diagram.
 
 <img width="1728" height="959" alt="image" src="https://github.com/user-attachments/assets/62ded465-cb80-4429-914d-81180e25dcc8" />
 
