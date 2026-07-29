@@ -32,7 +32,10 @@ data actually starts moving. Each step gates the next, and every "test"/"validat
 a live check against your real source and destination clusters, not a syntax check — a
 green badge means the app actually talked to that cluster successfully.
 
-*You will need an account on the source and destination servers with the required permissions and the IP address / range of the Couchbase Migration Agent must be in each servers Allowed IP Addresses. Link to reqiuired permissions: https://github.com/erikhinderer/couchbase/tree/main/couchbase-migration-agent#required-source-cluster-permissions
+*You will need an administrator account on the source and destination servers or a tailored role with the required permissions. 
+Link to reqiuired permissions: https://github.com/erikhinderer/couchbase/tree/main/couchbase-migration-agent#required-source-cluster-permissions
+
+*Ensure to add the IP address / range of the Couchbase Migration Agent to the source and destination servers Allowed IP Addresses.
 
 ### 1. Source
 
