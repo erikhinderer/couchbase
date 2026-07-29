@@ -1,0 +1,17 @@
+.env
+**/certs/*.crt
+!**/certs/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Misc
+.DS_Store
