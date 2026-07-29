@@ -4,13 +4,6 @@ A Dockerized AI agent for migrating **MongoDB**, **Amazon DynamoDB**, **Redis**,
 Cassandra**, and **Microsoft Azure Cosmos DB** into **Couchbase Server (Enterprise Edition)**
 or **Couchbase Capella**.
 
-This project follows the design and architecture of the sibling
-[`couchbase-migration-agent`](../couchbase-migration-agent) project (Couchbase-to-Capella
-migrations) and reuses as many of its components as practical: the same FastAPI + React +
-Couchbase-backed-agent-memory + local Qwen LLM stack, the same wizard-driven UX, the same
-websocket-streamed live progress model, and the same bottleneck-detection/auto-throttle
-pattern. The two places it necessarily diverges are called out below.
-
 ## Quick start
 
 ```bash
