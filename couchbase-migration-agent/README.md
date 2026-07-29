@@ -4,9 +4,7 @@ A Dockerized AI agent for migrating Couchbase Server clusters — single-node, m
 and Cross Data Center Replication (XDCR) topologies — to Couchbase Capella. Supports
 Couchbase Server **7.2.0 through 8.0.2**.
 
-The Couchbase Migration Agent performs Migration Bottleneck Detection as a feature of the agent and it polls the source server for resources and reconfigures active backups and XDCR replication on the fly to use the optimal number of CPUs for the backup job and restart it, so that the migration from the source server doesn’t degrade client connections to the source database.
-
-<img width="1470" height="818" alt="image" src="https://github.com/user-attachments/assets/0d58363f-6236-4578-9708-73137a68abbf" />
+<img width="1468" height="813" alt="image" src="https://github.com/user-attachments/assets/63eec8cd-64f7-4a9c-be75-3b2d53ea4411" />
 
 ## Quick start
 
@@ -22,8 +20,6 @@ docker compose up --build
 - API: http://localhost:8000 (docs at `/docs`)
 - Couchbase EE admin console (agent memory): http://localhost:8091
 - Qwen / Ollama API: http://localhost:11434
-
-*UI access from outside localhost - the backend's CORS_ORIGINS and the frontend's VITE_API_BASE_URL/VITE_WS_BASE_URL are set to localhost defaults. To access the UI from outside the localhost, set all three in .env to the DNS name or IP of the Couchbase Migration Assistant host, then rebuild -- VITE_API_BASE_URL/VITE_WS_BASE_URL are baked into the frontend's JS at build time by Vite, so docker compose up --build (not a plain up, and not a container restart) is required for a change to take effect. See the .env comments for the exact variables.
 
 First boot pulls the Qwen model (`qwen3:8b` by default) and initializes the Couchbase
 Enterprise Edition memory store — this can take a few minutes; subsequent starts are fast
@@ -218,19 +214,28 @@ What's checked, using data the app is already streaming or already has REST acce
 - **Memory pressure** — a relevant node is critically low on free memory during the
   transfer.
 
-**During a backup, the first three of those are handled automatically.** CPU saturation,
-thread oversubscription, and memory pressure on the *source* cluster all trace back to the
-same lever — `cbbackupmgr`'s `--threads` — and the backup is a subprocess this app itself
-launched and fully controls, so when one of those fires the agent stops that `cbbackupmgr`
-process and relaunches it with Couchbase's own recommended thread count, against a fresh
-backup archive (`cbbackupmgr` has no supported way to resume a *backup* that was killed
-mid-write, unlike restore). The wizard's Backup step shows an "Auto-throttling" badge for
-the few seconds this takes, and the agent panel posts a 🔧 message once it's done — "reduced
-threads from 8 to 3 and restarted the backup" — rather than a suggestion, since it's
-reporting something it already did. This only ever throttles *down*, never below 1 thread,
-and caps itself at 3 restarts per backup; if the cluster is still saturated after that,
-throttling stops and the last detection finding stands as a plain suggestion instead, same
-as everything else below.
+**During a backup, CPU saturation and memory pressure on the *source* cluster are handled
+automatically** — both are real, currently-observed load, not just a configuration that
+might become a problem, and the backup is a subprocess this app itself launched and fully
+controls, so the agent stops that `cbbackupmgr` process and relaunches it with Couchbase's
+own recommended thread count, against a fresh backup archive (`cbbackupmgr` has no
+supported way to resume a *backup* that was killed mid-write, unlike restore). The wizard's
+Backup step shows an "Auto-throttling" badge for the few seconds this takes, and the agent
+panel posts a 🔧 message once it's done — "reduced threads from 8 to 3 and restarted the
+backup" — rather than a suggestion, since it's reporting something it already did. This
+only ever throttles *down*, never below 1 thread, and caps itself at 3 restarts per backup;
+if the cluster is still saturated after that, throttling stops and the last detection
+finding stands as a plain suggestion instead, same as everything else below.
+
+**Thread oversubscription is deliberately excluded from auto-throttling**, even though the
+lever (`--threads`) is the same one CPU saturation and memory pressure use. It fires purely
+from the configured value exceeding Couchbase's own sizing formula — a preemptive,
+config-based check, not an observation that the source is actually struggling — and in
+testing it fired at CPU utilization as low as 11%. Auto-restarting a backup on that alone
+would cost time (a restart means starting the archive over from 0%) without the source
+being under any real pressure to relieve, which runs against the whole point of
+auto-throttling. It still shows up as a suggestion in the agent panel — worth acting on for
+future runs against that cluster — it just doesn't trigger an automatic restart.
 
 Everything else stays diagnosis-and-suggestion only, for the agent to raise in chat rather
 than act on: stalled/degraded throughput (on either phase) isn't a thread-count problem —

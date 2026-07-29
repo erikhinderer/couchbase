@@ -242,13 +242,18 @@ class MigrationEngine:
             record.validation_report.source_topology.buckets if record.validation_report and record.validation_report.source_topology else []
         )
 
-        # Auto-throttle loop: a thread-actionable bottleneck finding on the BACKUP
-        # phase (CPU saturation / thread oversubscription / memory pressure on the
-        # source cluster) doesn't just get posted as a suggestion here -- since this
-        # is a subprocess the app itself launched and fully controls, it stops
-        # cbbackupmgr and relaunches at Couchbase's own recommended thread count
-        # instead, capped at MAX_AUTO_THROTTLE_ATTEMPTS restarts and never below
-        # MIN_AUTO_THROTTLE_THREADS. Each attempt gets a fresh archive/repo (see
+        # Auto-throttle loop: a bottleneck finding backed by real, currently-observed
+        # pressure on the source (CPU saturation or memory pressure -- see
+        # bottleneck_detector.py's recommended_threads doc) doesn't just get posted
+        # as a suggestion here -- since this is a subprocess the app itself launched
+        # and fully controls, it stops cbbackupmgr and relaunches at Couchbase's own
+        # recommended thread count instead, capped at MAX_AUTO_THROTTLE_ATTEMPTS
+        # restarts and never below MIN_AUTO_THROTTLE_THREADS. Thread oversubscription
+        # alone (configured --threads above the cpu_cores*0.75 formula, without
+        # actual CPU/memory pressure) deliberately does NOT trigger this -- it can
+        # fire at low CPU, and auto-restarting a backup with nothing actually wrong
+        # on the source would just cost time for no real protection; it stays a
+        # suggestion. Each throttle attempt gets a fresh archive/repo (see
         # BackupManager's repo_suffix) since cbbackupmgr has no supported way to
         # resume a *backup* that was killed mid-write. If attempts run out while the
         # cluster is still saturated, the loop just stops throttling and lets the

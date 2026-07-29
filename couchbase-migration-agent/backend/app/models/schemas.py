@@ -232,16 +232,18 @@ class MigrationStats(BaseModel):
 class BottleneckFinding(BaseModel):
     """A single detected backup/restore bottleneck, produced by BottleneckMonitor
     (backend/app/core/bottleneck_detector.py) while a migration is actively running.
-    For the BACKUP phase, a thread-actionable finding (CPU saturation, thread
-    oversubscription, memory pressure) is handled automatically -- the agent stops
-    and relaunches the backup at a lower --threads value (see
+    For the BACKUP phase, a finding backed by real, currently-observed pressure on
+    the source (CPU_SATURATED or MEMORY_PRESSURE) is handled automatically -- the
+    agent stops and relaunches the backup at a lower --threads value (see
     MigrationEngine.backup_source()'s auto-throttle retry loop); auto_remediated is
     True on the follow-up finding that reports what it did. Everything else --
-    restore-phase findings (the destination side isn't under this app's process
-    control the way the backup subprocess it launched is) and throughput
-    stall/degraded findings on either phase (a threads change doesn't fix a network
-    problem) -- stays diagnosis + suggestion only, same as before. Surfaced to the
-    user via the websocket and proactively in the Ask The Agent panel."""
+    THREAD_OVERSUBSCRIBED (fires from a static thread-vs-CPU-core formula, not
+    observed load -- can trigger at low CPU, so isn't acted on automatically even
+    during backup), restore-phase findings (the destination side isn't under this
+    app's process control the way the backup subprocess it launched is), and
+    throughput stall/degraded findings on either phase (a threads change doesn't fix
+    a network problem) -- stays diagnosis + suggestion only. Surfaced to the user
+    via the websocket and proactively in the Ask The Agent panel."""
     finding_id: UUID = Field(default_factory=uuid4)
     kind: BottleneckKind
     phase: str  # "backup" or "restore" -- which leg of the pipeline this concerns
@@ -249,9 +251,10 @@ class BottleneckFinding(BaseModel):
     message: str  # what was observed, with the metric(s) that triggered it
     suggestion: str  # concrete, actionable remediation text (or, if auto_remediated, what was just done)
     detected_at: datetime = Field(default_factory=datetime.utcnow)
-    # Only meaningful for thread-actionable kinds (CPU_SATURATED/THREAD_OVERSUBSCRIBED/
-    # MEMORY_PRESSURE): the --threads value Couchbase's own backup-service sizing
-    # formula (max(1, cpu_cores * 0.75)) recommends for the busiest node observed.
+    # Only set for CPU_SATURATED/MEMORY_PRESSURE (real, observed source pressure):
+    # the --threads value Couchbase's own backup-service sizing formula
+    # (max(1, cpu_cores * 0.75)) recommends for the busiest node observed. Always
+    # None for THREAD_OVERSUBSCRIBED -- see the class docstring for why.
     recommended_threads: Optional[int] = None
     # True only on the follow-up finding posted once the agent has actually stopped
     # and relaunched a backup at a lower thread count -- never set on the initial

@@ -22,15 +22,21 @@ can't be retuned live. What CAN be automated is the same thing a human would do
 about a thread-actionable finding: stop the process and relaunch it with a lower
 --threads value. For the BACKUP phase (the source cluster, whose backup subprocess
 this app itself launched and fully controls), MigrationEngine.backup_source() does
-exactly that automatically for CPU_SATURATED/THREAD_OVERSUBSCRIBED/MEMORY_PRESSURE
-findings, using recommended_threads (below) as the new value, bounded by
-MIN_AUTO_THROTTLE_THREADS and MAX_AUTO_THROTTLE_ATTEMPTS. Everything else --
-THROUGHPUT_STALLED/THROUGHPUT_DEGRADED (not a threads problem; see their suggestion
-text) on either phase, and any finding during RESTORE (the destination side isn't a
-process this app launched and can safely kill/relaunch mid-flight the way it can its
-own backup subprocess -- restoring already has its own map-data retry loop with
-different failure semantics) -- stays a suggestion in the Ask The Agent panel for a
-person to act on.
+exactly that automatically for CPU_SATURATED and MEMORY_PRESSURE findings, using
+recommended_threads (below) as the new value, bounded by MIN_AUTO_THROTTLE_THREADS
+and MAX_AUTO_THROTTLE_ATTEMPTS -- both are real, currently-observed pressure on the
+source. THREAD_OVERSUBSCRIBED deliberately never sets recommended_threads and is
+never auto-acted on, even during backup: it fires purely from the static
+cpu_cores*0.75 formula being exceeded, which can (and in testing did) trigger at
+CPU utilization as low as 11% -- auto-restarting a backup on that alone would be
+acting without the source actually being under load, which defeats the point of
+auto-throttling in the first place. Everything else -- THREAD_OVERSUBSCRIBED (as
+just covered), THROUGHPUT_STALLED/THROUGHPUT_DEGRADED (not a threads problem; see
+their suggestion text) on either phase, and any finding during RESTORE (the
+destination side isn't a process this app launched and can safely kill/relaunch
+mid-flight the way it can its own backup subprocess -- restoring already has its
+own map-data retry loop with different failure semantics) -- stays a suggestion in
+the Ask The Agent panel for a person to act on.
 
 Findings are appended to MigrationRecord.bottleneck_findings by the caller
 (MigrationEngine) and broadcast over the existing per-migration websocket, where the
@@ -99,10 +105,11 @@ class _RawFinding:
     kind: BottleneckKind
     message: str
     suggestion: str
-    # Set only for thread-actionable kinds (CPU_SATURATED/THREAD_OVERSUBSCRIBED/
-    # MEMORY_PRESSURE) -- the caller uses this to auto-throttle a backup rather than
-    # just posting a suggestion. None for anything a threads change can't fix
-    # (THROUGHPUT_STALLED/THROUGHPUT_DEGRADED).
+    # Set only for CPU_SATURATED/MEMORY_PRESSURE -- real, observed pressure on the
+    # source -- so the caller can auto-throttle a backup rather than just posting a
+    # suggestion. Deliberately left None for THREAD_OVERSUBSCRIBED (fires from a
+    # static formula, not observed load; see stats_findings()) and for anything a
+    # threads change can't fix (THROUGHPUT_STALLED/THROUGHPUT_DEGRADED).
     recommended_threads: int | None = None
 
 
@@ -259,7 +266,15 @@ class BottleneckMonitor:
                     f"as the run progresses -- consider {recommended_threads} thread(s) for "
                     "future runs against this cluster."
                 ),
-                recommended_threads=recommended_threads,
+                # Deliberately NOT set: unlike CPU_SATURATED/MEMORY_PRESSURE (both real,
+                # observed pressure on the source), this fires purely off the static
+                # cpu_cores*0.75 formula being exceeded -- it can and does fire at low
+                # CPU (seen at 11% in testing). Auto-restarting a backup on that alone
+                # would mean action without the source actually being under load, which
+                # defeats the "protect the source's real performance" point of
+                # auto-throttling -- see the module docstring's SCOPE NOTE. Stays a
+                # suggestion the user can act on for future runs.
+                recommended_threads=None,
             ))
             self._mark(BottleneckKind.THREAD_OVERSUBSCRIBED)
 
