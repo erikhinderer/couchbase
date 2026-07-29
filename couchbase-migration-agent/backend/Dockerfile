@@ -19,6 +19,27 @@ FROM python:3.11-slim AS base
 WORKDIR /app
 
 COPY requirements.txt .
+
+# Trust an optional corporate/proxy root CA before installing anything from
+# PyPI. On a corporate laptop behind an SSL-inspecting proxy (Zscaler,
+# Netskope, etc.), pip verifies against its own bundled CA store -- not
+# macOS's system trust store that Docker Desktop itself relies on for image
+# pulls -- so intercepted HTTPS traffic to PyPI fails with
+# CERTIFICATE_VERIFY_FAILED / "self-signed certificate in certificate chain".
+# Run scripts/setup-corporate-ca.sh once to export that cert into
+# backend/certs/; on machines that don't need it, certs/ stays empty and this
+# whole block is a no-op.
+COPY certs/ /usr/local/share/ca-certificates/extra/
+RUN if find /usr/local/share/ca-certificates/extra -name '*.crt' 2>/dev/null | grep -q .; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends ca-certificates && \
+      update-ca-certificates && \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy just the CLI tools (and their shared libs) out of the official Couchbase

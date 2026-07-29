@@ -1,0 +1,15 @@
+# Corporate/proxy root CA exported by scripts/setup-corporate-ca.sh.
+# Machine-specific -- never commit an actual cert, only the placeholder dirs.
+certs/*.crt
+backend/certs/*.crt
+frontend/certs/*.crt
+!certs/.gitkeep
+!backend/certs/.gitkeep
+!frontend/certs/.gitkeep
+
+# Common local cruft
+.env
+node_modules/
+__pycache__/
+*.pyc
+dist/

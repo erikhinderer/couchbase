@@ -32,6 +32,8 @@ data actually starts moving. Each step gates the next, and every "test"/"validat
 a live check against your real source and destination clusters, not a syntax check — a
 green badge means the app actually talked to that cluster successfully.
 
+*You will need an account on the source and destination servers with Backup Full Admin priveledges and the IP address / range of the Couchbase Migration Agent must be in each servers Allowed IP Addresses.
+
 ### 1. Source
 
 - **Migration name** — a free-text label used everywhere else in the app (dashboard, the
@@ -364,6 +366,33 @@ only applies to the source cluster's backup anyway, and source clusters in this 
 supported migration path are self-managed, so this isn't a practical gap for that feature;
 throughput-trend findings (stalled/degraded) work against either side since they're derived
 entirely from `cbbackupmgr`'s own output.
+
+### Troubleshooting a build failure behind a corporate proxy
+
+If `docker compose up --build` fails during `pip install` or `npm install` with something
+like:
+
+```
+SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed:
+self-signed certificate in certificate chain
+```
+
+your laptop is behind an SSL-inspecting corporate proxy (Zscaler, Netskope, Palo Alto
+GlobalProtect, etc., usually pushed via MDM). Docker Desktop's own image pulls go through
+macOS's system trust store, so those succeed — but pip/npm inside the build verify against
+their own bundled CA stores, which have never heard of your proxy's root cert.
+
+Fix:
+
+```bash
+./scripts/setup-corporate-ca.sh   # exports the cert from your Mac's keychain
+docker compose build --no-cache
+```
+
+This drops the exported cert into `certs/`, `backend/certs/`, and `frontend/certs/` (one per
+Docker build context) — gitignored, machine-specific, and a no-op on machines that don't need
+it. macOS only; on Linux, save your org's proxy root CA as `corporate-ca.crt` in each of those
+three directories yourself.
 
 ### Troubleshooting first boot
 
