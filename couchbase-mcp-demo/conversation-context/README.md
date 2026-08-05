@@ -4,7 +4,7 @@ This demo shows how LLMs can directly read and write Couchbase data through natu
 
 ## Simple Example of What It Does
 
-- **LLM stores data:** Tell the AI "My name is Yusuf, I like to eat Oranges". It writes to Couchbase automatically
+- **LLM stores data:** Tell the AI "My name is Erik, I like to eat Oranges". It writes to Couchbase automatically
 - **LLM retrieves data:** Ask "What's my name?". It reads from Couchbase and answers
 - **Data persists:** Close the app, restart, ask again. Data survives in Couchbase
 - **Watch it happen:** Use the Couchbase Server Web Console (or Capella UI) to see documents updating in real-time
