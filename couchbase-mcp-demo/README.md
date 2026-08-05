@@ -1,5 +1,7 @@
 # Couchbase MCP Tool Filtering Demo
 
+<img width="1470" height="810" alt="image" src="https://github.com/user-attachments/assets/85dc3b6e-999c-4aa0-8325-83ec0e4d9329" />
+
 A branded, Dockerized demo showing how Couchbase vector search can pre-filter MCP tools before a local Ollama LLM performs tool selection, while the unfiltered baseline sends every tool to the same local model. The demo is styled for Couchbase and uses insurance operations prompts around claims, policy servicing, underwriting, incidents, and agent support. All LLM inference runs locally on Ollama - no external API key or account is required.
 
 ## What it demonstrates
