@@ -1,4 +1,0 @@
-openai-agents==0.0.16
-openai
-sentence-transformers==2.2.2
-numpy
