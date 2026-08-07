@@ -3,6 +3,9 @@
 # status table of what's still starting vs. what's ready, instead of a wall
 # of interleaved container logs.
 #
+# Configure: chmod +x start.sh
+# The script needs to be executable before it can be run.
+#
 # Usage: ./start.sh
 # Ctrl-C stops watching (the containers keep running in the background,
 # same as any `docker compose up -d`). Re-run `./start.sh` any time to
