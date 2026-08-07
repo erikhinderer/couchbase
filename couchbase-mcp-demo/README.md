@@ -13,7 +13,7 @@ The UI compares two approaches, both backed by the same local Ollama model:
 1. **Baseline:** send the full MCP tool catalog to the LLM.
 2. **Couchbase-filtered:** use Couchbase vector search (Search Service) and semantic caching to send only the most relevant tools to the LLM.
 
-This highlights reductions in prompt tokens, latency, and context noise while preserving accurate tool selection - isolating the effect of vector-prefiltering rather than comparing different model providers.
+This highlights reductions in prompt tokens, latency, and context noise while preserving accurate tool selection - isolating the effect of vector-prefiltering and to demonstrate how to eliminate MCP Tool Overload conditions with Couchbase Vector Search.
 
 ## Run with Docker Compose
 
